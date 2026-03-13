@@ -21,6 +21,15 @@ from openviking_cli.utils import VikingURI, get_logger
 logger = get_logger(__name__)
 
 
+async def _uri_exists(viking_fs, uri: str, ctx: Optional[RequestContext] = None) -> bool:
+    """Best-effort existence check for VikingFS URIs."""
+    try:
+        await viking_fs.stat(uri, ctx=ctx)
+        return True
+    except Exception:
+        return False
+
+
 def _owner_space_for_uri(uri: str, ctx: RequestContext) -> str:
     """Derive owner_space from a URI."""
     if uri.startswith("viking://agent/"):
@@ -273,15 +282,13 @@ async def index_resource(
     abstract = ""
     overview = ""
 
-    if await viking_fs.exists(abstract_uri):
-        content = await viking_fs.read_file(abstract_uri)
-        if isinstance(content, bytes):
-            abstract = content.decode("utf-8")
+    if await _uri_exists(viking_fs, abstract_uri, ctx=ctx):
+        content = await viking_fs.read_file(abstract_uri, ctx=ctx)
+        abstract = content if isinstance(content, str) else content.decode("utf-8")
 
-    if await viking_fs.exists(overview_uri):
-        content = await viking_fs.read_file(overview_uri)
-        if isinstance(content, bytes):
-            overview = content.decode("utf-8")
+    if await _uri_exists(viking_fs, overview_uri, ctx=ctx):
+        content = await viking_fs.read_file(overview_uri, ctx=ctx)
+        overview = content if isinstance(content, str) else content.decode("utf-8")
 
     if abstract or overview:
         await vectorize_directory_meta(uri, abstract, overview, ctx=ctx)

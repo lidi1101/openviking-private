@@ -51,3 +51,32 @@ pub async fn add_skill(
     output_success(&result, format, compact);
     Ok(())
 }
+
+pub async fn build_index(
+    client: &HttpClient,
+    resource_uris: Vec<String>,
+    wait: bool,
+    timeout: Option<f64>,
+    format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let result = client.build_index(resource_uris, wait, timeout).await?;
+    output_success(&result, format, compact);
+    Ok(())
+}
+
+pub async fn summarize(
+    client: &HttpClient,
+    resource_uris: Vec<String>,
+    wait: bool,
+    timeout: Option<f64>,
+    skip_vectorization: bool,
+    format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let result = client
+        .summarize(resource_uris, wait, timeout, skip_vectorization)
+        .await?;
+    output_success(&result, format, compact);
+    Ok(())
+}

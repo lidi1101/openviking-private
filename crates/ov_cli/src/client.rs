@@ -562,6 +562,36 @@ impl HttpClient {
         }
     }
 
+    pub async fn build_index(
+        &self,
+        resource_uris: Vec<String>,
+        wait: bool,
+        timeout: Option<f64>,
+    ) -> Result<serde_json::Value> {
+        let body = serde_json::json!({
+            "resource_uris": resource_uris,
+            "wait": wait,
+            "timeout": timeout,
+        });
+        self.post("/api/v1/resources/build_index", &body).await
+    }
+
+    pub async fn summarize(
+        &self,
+        resource_uris: Vec<String>,
+        wait: bool,
+        timeout: Option<f64>,
+        skip_vectorization: bool,
+    ) -> Result<serde_json::Value> {
+        let body = serde_json::json!({
+            "resource_uris": resource_uris,
+            "wait": wait,
+            "timeout": timeout,
+            "skip_vectorization": skip_vectorization,
+        });
+        self.post("/api/v1/resources/summarize", &body).await
+    }
+
     // ============ Relation Methods ============
 
     pub async fn relations(&self, uri: &str) -> Result<serde_json::Value> {

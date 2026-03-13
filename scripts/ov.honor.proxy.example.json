@@ -1,0 +1,30 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 1933
+  },
+  "storage": {
+    "workspace": "D:/openviking/workspace"
+  },
+  "log": {
+    "level": "INFO",
+    "output": "stdout"
+  },
+  "embedding": {
+    "dense": {
+      "provider": "openai",
+      "api_base": "http://127.0.0.1:18080/v1",
+      "api_key": "dummy",
+      "model": "honor-embedding",
+      "dimension": 1024
+    },
+    "max_concurrent": 10
+  },
+  "vlm": {
+    "provider": "openai",
+    "api_base": "https://api.openai.com/v1",
+    "api_key": "replace-with-your-vlm-api-key",
+    "model": "gpt-4o",
+    "max_concurrent": 100
+  }
+}

@@ -1,3 +1,4 @@
+import builtins
 import json
 import os
 import shutil
@@ -10,10 +11,30 @@ import pybind11
 from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
 
-CMAKE_PATH = shutil.which("cmake") or "cmake"
-C_COMPILER_PATH = shutil.which("gcc") or "gcc"
-CXX_COMPILER_PATH = shutil.which("g++") or "g++"
+CMAKE_PATH = os.environ.get("CMAKE") or shutil.which("cmake") or "cmake"
+C_COMPILER_PATH = os.environ.get("CC") or shutil.which("gcc")
+CXX_COMPILER_PATH = os.environ.get("CXX") or shutil.which("g++")
+AR_PATH = os.environ.get("AR") or shutil.which("ar")
 ENGINE_SOURCE_DIR = "src/"
+
+
+def _safe_print(*args, **kwargs):
+    """Print build logs safely on Windows GBK consoles."""
+    try:
+        builtins.print(*args, **kwargs)
+    except UnicodeEncodeError:
+        sep = kwargs.get("sep", " ")
+        end = kwargs.get("end", "\n")
+        text = sep.join(str(arg) for arg in args)
+        encoding = getattr(sys.stdout, "encoding", None) or "gbk"
+        safe_text = text.encode(encoding, errors="backslashreplace").decode(encoding)
+        builtins.print(safe_text, end=end)
+
+
+print = _safe_print
+
+
+
 
 
 class OpenVikingBuildExt(build_ext):
@@ -43,6 +64,122 @@ class OpenVikingBuildExt(build_ext):
                 self._copy_artifact(target_binary, build_pkg_dir / "bin" / target_binary.name)
             if target_lib and target_lib.exists():
                 self._copy_artifact(target_lib, build_pkg_dir / "lib" / target_lib.name)
+
+    def _decode_subprocess_output(self, content):
+        if not content:
+            return ""
+        return content.decode("utf-8", errors="replace")
+
+    def _run_subprocess(self, args, cwd, env, error_prefix):
+        try:
+            result = subprocess.run(
+                args,
+                cwd=str(cwd),
+                env=env,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+        except FileNotFoundError as exc:
+            cmd_name = args[0]
+            raise RuntimeError(
+                f"{error_prefix}: required command '{cmd_name}' was not found on PATH"
+            ) from exc
+        except subprocess.CalledProcessError as exc:
+            error_msg = f"{error_prefix}: Command '{args}' returned non-zero exit status {exc.returncode}."
+            if exc.stdout:
+                error_msg += f"\nBuild stdout: {self._decode_subprocess_output(exc.stdout)}"
+            if exc.stderr:
+                error_msg += f"\nBuild stderr: {self._decode_subprocess_output(exc.stderr)}"
+            raise RuntimeError(error_msg) from exc
+
+        if result.stdout:
+            print(f"Build stdout: {self._decode_subprocess_output(result.stdout)}")
+        if result.stderr:
+            print(f"Build stderr: {self._decode_subprocess_output(result.stderr)}")
+        return result
+
+    def _resolve_windows_cmake_generator_args(self):
+        if not C_COMPILER_PATH or not CXX_COMPILER_PATH:
+            raise RuntimeError(
+                "Windows source builds require MinGW-w64 gcc/g++ on PATH because the "
+                "native extension and AGFS binding library do not currently support MSVC."
+            )
+
+        mingw_make = shutil.which("mingw32-make")
+        if mingw_make:
+            return [
+                "-G",
+                "MinGW Makefiles",
+                f"-DCMAKE_MAKE_PROGRAM={mingw_make}",
+            ]
+
+        ninja = shutil.which("ninja")
+        if ninja:
+            return ["-G", "Ninja"]
+
+        raise RuntimeError(
+            "Windows source builds require either 'mingw32-make' or 'ninja' on PATH "
+            "alongside MinGW-w64 gcc/g++."
+        )
+
+    def _should_skip_windows_ov_build(self):
+        if sys.platform != "win32":
+            return False, ""
+
+        if os.environ.get("OPENVIKING_SKIP_OV_BUILD") == "1":
+            return (
+                True,
+                "OPENVIKING_SKIP_OV_BUILD=1 is set. Skipping ov CLI build on Windows.",
+            )
+
+        cargo_path = shutil.which("cargo")
+        if not cargo_path:
+            return False, ""
+
+        if shutil.which("link.exe"):
+            return False, ""
+
+        try:
+            result = subprocess.run(
+                ["rustc", "-vV"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+        except Exception:
+            return False, ""
+
+        rustc_info = self._decode_subprocess_output(result.stdout)
+        host_line = next(
+            (line.strip() for line in rustc_info.splitlines() if line.startswith("host: ")),
+            "",
+        )
+        if host_line.endswith("windows-msvc"):
+            return (
+                True,
+                "Detected Rust MSVC toolchain on Windows without 'link.exe'. "
+                "Skipping ov CLI build because it requires Visual C++ Build Tools or a GNU Rust target.",
+            )
+
+        return False, ""
+
+    def _configure_windows_cargo_env(self, env):
+        if sys.platform != "win32":
+            return env
+
+        configured_env = env.copy()
+
+        if not configured_env.get("CARGO_BUILD_TARGET"):
+            if C_COMPILER_PATH and CXX_COMPILER_PATH:
+                configured_env["CARGO_BUILD_TARGET"] = "x86_64-pc-windows-gnu"
+
+        if configured_env.get("CARGO_BUILD_TARGET") == "x86_64-pc-windows-gnu":
+            configured_env.setdefault("CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER", C_COMPILER_PATH or "gcc")
+            if AR_PATH:
+                configured_env.setdefault("CARGO_TARGET_X86_64_PC_WINDOWS_GNU_AR", AR_PATH)
+
+        return configured_env
 
     def _require_artifact(self, artifact_path, artifact_name, stage_name):
         """Abort the build immediately when a required artifact is missing."""
@@ -162,34 +299,19 @@ class OpenVikingBuildExt(build_ext):
                     else ["make", "build"]
                 )
 
-                result = subprocess.run(
+                self._run_subprocess(
                     build_args,
                     cwd=str(agfs_server_dir),
                     env=env,
-                    check=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
+                    error_prefix="Failed to build AGFS server from source",
                 )
-                if result.stdout:
-                    print(f"Build stdout: {result.stdout.decode('utf-8', errors='replace')}")
-                if result.stderr:
-                    print(f"Build stderr: {result.stderr.decode('utf-8', errors='replace')}")
 
                 agfs_built_binary = agfs_server_dir / "build" / binary_name
                 self._require_artifact(agfs_built_binary, binary_name, "AGFS server build")
                 self._copy_artifact(agfs_built_binary, agfs_target_binary)
                 print("[OK] AGFS server built successfully from source")
             except Exception as exc:
-                error_msg = f"Failed to build AGFS server from source: {exc}"
-                if isinstance(exc, subprocess.CalledProcessError):
-                    if exc.stdout:
-                        error_msg += (
-                            f"\nBuild stdout:\n{exc.stdout.decode('utf-8', errors='replace')}"
-                        )
-                    if exc.stderr:
-                        error_msg += (
-                            f"\nBuild stderr:\n{exc.stderr.decode('utf-8', errors='replace')}"
-                        )
+                error_msg = str(exc)
                 print(f"[Error] {error_msg}")
                 raise RuntimeError(error_msg)
 
@@ -198,34 +320,31 @@ class OpenVikingBuildExt(build_ext):
                 env = os.environ.copy()
                 env["CGO_ENABLED"] = "1"
 
-                result = subprocess.run(
-                    ["make", "build-lib"],
+                if sys.platform == "win32":
+                    build_args = [
+                        "go",
+                        "build",
+                        "-buildmode=c-shared",
+                        "-o",
+                        f"build/{lib_name}",
+                        "cmd/pybinding/main.go",
+                    ]
+                else:
+                    build_args = ["make", "build-lib"]
+
+                self._run_subprocess(
+                    build_args,
                     cwd=str(agfs_server_dir),
                     env=env,
-                    check=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
+                    error_prefix="Failed to build AGFS binding library",
                 )
-                if result.stdout:
-                    print(f"Build stdout: {result.stdout.decode('utf-8', errors='replace')}")
-                if result.stderr:
-                    print(f"Build stderr: {result.stderr.decode('utf-8', errors='replace')}")
 
                 agfs_built_lib = agfs_server_dir / "build" / lib_name
                 self._require_artifact(agfs_built_lib, lib_name, "AGFS binding build")
                 self._copy_artifact(agfs_built_lib, agfs_target_lib)
                 print("[OK] AGFS binding library built successfully")
             except Exception as exc:
-                error_msg = f"Failed to build AGFS binding library: {exc}"
-                if isinstance(exc, subprocess.CalledProcessError):
-                    if exc.stdout:
-                        error_msg += (
-                            f"\nBuild stdout: {exc.stdout.decode('utf-8', errors='replace')}"
-                        )
-                    if exc.stderr:
-                        error_msg += (
-                            f"\nBuild stderr: {exc.stderr.decode('utf-8', errors='replace')}"
-                        )
+                error_msg = str(exc)
                 print(f"[Error] {error_msg}")
                 raise RuntimeError(error_msg)
         else:
@@ -241,13 +360,18 @@ class OpenVikingBuildExt(build_ext):
         binary_name = "ov.exe" if sys.platform == "win32" else "ov"
         ov_cli_dir = Path("crates/ov_cli").resolve()
         ov_target_binary = Path("openviking/bin").resolve() / binary_name
-
-        self._run_stage_with_artifact_checks(
-            "ov CLI build",
-            lambda: self._build_ov_cli_artifact_impl(ov_cli_dir, binary_name, ov_target_binary),
-            [(ov_target_binary, binary_name)],
-            on_success=lambda: self._copy_artifacts_to_build_lib(ov_target_binary, None),
+        built_or_found = self._build_ov_cli_artifact_impl(
+            ov_cli_dir, binary_name, ov_target_binary
         )
+        if built_or_found:
+            self._require_artifact(ov_target_binary, binary_name, "ov CLI build")
+            self._copy_artifacts_to_build_lib(ov_target_binary, None)
+        else:
+            print(
+                "[Warning] Skipping ov CLI packaging because no prebuilt binary was found "
+                "and Cargo is unavailable. The 'openviking-server' entry point will still work, "
+                "but the 'ov'/'openviking' CLI wrappers will require a separately installed ov binary."
+            )
 
     def _build_ov_cli_artifact_impl(self, ov_cli_dir, binary_name, ov_target_binary):
         """Implement ov CLI building without final artifact checks."""
@@ -257,36 +381,39 @@ class OpenVikingBuildExt(build_ext):
             src_bin = Path(prebuilt_dir).resolve() / binary_name
             if src_bin.exists():
                 self._copy_artifact(src_bin, ov_target_binary)
-                return
+                return True
 
-        if os.environ.get("OV_SKIP_OV_BUILD") == "1":
+        if os.environ.get("OV_SKIP_OV_BUILD") == "1" or os.environ.get("OPENVIKING_SKIP_OV_BUILD") == "1":
             if ov_target_binary.exists():
                 print("[OK] Skipping ov CLI build, using existing binary")
-                return
-            print("[Warning] OV_SKIP_OV_BUILD=1 but binary is missing. Will try to build.")
+                return True
+            print(
+                "[Warning] OV_SKIP_OV_BUILD=1/OPENVIKING_SKIP_OV_BUILD=1 and ov CLI binary is missing. "
+                "Skipping build."
+            )
+            return False
+
+        should_skip, skip_reason = self._should_skip_windows_ov_build()
+        if should_skip:
+            print(f"[Warning] {skip_reason}")
+            return False
 
         if ov_cli_dir.exists() and shutil.which("cargo"):
             print("Building ov CLI from source...")
             try:
-                env = os.environ.copy()
+                env = self._configure_windows_cargo_env(os.environ.copy())
                 build_args = ["cargo", "build", "--release"]
                 target = env.get("CARGO_BUILD_TARGET")
                 if target:
                     print(f"Cross-compiling with CARGO_BUILD_TARGET={target}")
                     build_args.extend(["--target", target])
 
-                result = subprocess.run(
+                self._run_subprocess(
                     build_args,
                     cwd=str(ov_cli_dir),
                     env=env,
-                    check=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
+                    error_prefix="Failed to build ov CLI from source",
                 )
-                if result.stdout:
-                    print(f"Build stdout: {result.stdout.decode('utf-8', errors='replace')}")
-                if result.stderr:
-                    print(f"Build stderr: {result.stderr.decode('utf-8', errors='replace')}")
 
                 cargo_target_dir = self._resolve_cargo_target_dir(ov_cli_dir, env)
                 if target:
@@ -297,26 +424,21 @@ class OpenVikingBuildExt(build_ext):
                 self._require_artifact(built_bin, binary_name, "ov CLI build")
                 self._copy_artifact(built_bin, ov_target_binary)
                 print("[OK] ov CLI built successfully from source")
+                return True
             except Exception as exc:
-                error_msg = f"Failed to build ov CLI from source: {exc}"
-                if isinstance(exc, subprocess.CalledProcessError):
-                    if exc.stdout:
-                        error_msg += (
-                            f"\nBuild stdout: {exc.stdout.decode('utf-8', errors='replace')}"
-                        )
-                    if exc.stderr:
-                        error_msg += (
-                            f"\nBuild stderr: {exc.stderr.decode('utf-8', errors='replace')}"
-                        )
+                error_msg = str(exc)
                 print(f"[Error] {error_msg}")
                 raise RuntimeError(error_msg)
         else:
             if ov_target_binary.exists():
                 print("[Info] ov CLI binary already exists locally. Skipping source build.")
+                return True
             elif not ov_cli_dir.exists():
                 print(f"[Warning] ov CLI source directory not found at {ov_cli_dir}")
+                return False
             else:
                 print("[Warning] Cargo not found. Cannot build ov CLI from source.")
+                return False
 
     def build_extension(self, ext):
         """Build a single Python native extension artifact using CMake."""
@@ -349,10 +471,13 @@ class OpenVikingBuildExt(build_ext):
             f"-DPython3_INCLUDE_DIRS={sysconfig.get_path('include')}",
             f"-DPython3_LIBRARIES={sysconfig.get_config_vars().get('LIBRARY')}",
             f"-Dpybind11_DIR={pybind11.get_cmake_dir()}",
-            f"-DCMAKE_C_COMPILER={C_COMPILER_PATH}",
-            f"-DCMAKE_CXX_COMPILER={CXX_COMPILER_PATH}",
             f"-DOV_X86_SIMD_LEVEL={os.environ.get('OV_X86_SIMD_LEVEL', 'AVX2')}",
         ]
+
+        if C_COMPILER_PATH:
+            cmake_args.append(f"-DCMAKE_C_COMPILER={C_COMPILER_PATH}")
+        if CXX_COMPILER_PATH:
+            cmake_args.append(f"-DCMAKE_CXX_COMPILER={CXX_COMPILER_PATH}")
 
         if sys.platform == "darwin":
             cmake_args.append("-DCMAKE_OSX_DEPLOYMENT_TARGET=10.15")
@@ -360,7 +485,7 @@ class OpenVikingBuildExt(build_ext):
             if target_arch:
                 cmake_args.append(f"-DCMAKE_OSX_ARCHITECTURES={target_arch}")
         elif sys.platform == "win32":
-            cmake_args.extend(["-G", "MinGW Makefiles"])
+            cmake_args.extend(self._resolve_windows_cmake_generator_args())
 
         self.spawn([self.cmake_executable] + cmake_args)
 

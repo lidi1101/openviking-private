@@ -157,6 +157,32 @@ class SyncHTTPClient:
         """Wait for all processing to complete."""
         return run_async(self._async_client.wait_processed(timeout))
 
+    def build_index(
+        self,
+        resource_uris: List[str],
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Build vector index for existing resources."""
+        return run_async(self._async_client.build_index(resource_uris, wait=wait, timeout=timeout))
+
+    def summarize(
+        self,
+        resource_uris: List[str],
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        skip_vectorization: bool = False,
+    ) -> Dict[str, Any]:
+        """Summarize existing resources."""
+        return run_async(
+            self._async_client.summarize(
+                resource_uris,
+                wait=wait,
+                timeout=timeout,
+                skip_vectorization=skip_vectorization,
+            )
+        )
+
     # ============= Search =============
 
     def search(

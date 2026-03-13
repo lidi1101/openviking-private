@@ -53,6 +53,20 @@ class AddSkillRequest(BaseModel):
     timeout: Optional[float] = None
 
 
+class ResourceActionRequest(BaseModel):
+    """Request model for manual resource actions."""
+
+    resource_uris: list[str]
+    wait: bool = False
+    timeout: Optional[float] = None
+
+
+class SummarizeRequest(ResourceActionRequest):
+    """Request model for summarize."""
+
+    skip_vectorization: bool = False
+
+
 def _cleanup_temp_files(temp_dir: Path, max_age_hours: int = 1):
     """Clean up temporary files older than max_age_hours."""
     if not temp_dir.exists():
@@ -145,4 +159,37 @@ async def add_skill(
         wait=request.wait,
         timeout=request.timeout,
     )
+    return Response(status="ok", result=result)
+
+
+@router.post("/resources/build_index")
+async def build_index(
+    request: ResourceActionRequest,
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Manually build vector index for existing resources."""
+    service = get_service()
+    result = await service.resources.build_index(
+        resource_uris=request.resource_uris,
+        ctx=_ctx,
+    )
+    if request.wait:
+        result["queue_status"] = await service.resources.wait_processed(timeout=request.timeout)
+    return Response(status="ok", result=result)
+
+
+@router.post("/resources/summarize")
+async def summarize(
+    request: SummarizeRequest,
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Manually enqueue summarization for existing resources."""
+    service = get_service()
+    result = await service.resources.summarize(
+        resource_uris=request.resource_uris,
+        ctx=_ctx,
+        skip_vectorization=request.skip_vectorization,
+    )
+    if request.wait:
+        result["queue_status"] = await service.resources.wait_processed(timeout=request.timeout)
     return Response(status="ok", result=result)

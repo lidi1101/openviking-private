@@ -324,6 +324,33 @@ enum Commands {
         /// or JSON array of such objects for multiple messages.
         content: String,
     },
+    /// Build vector index for existing resources
+    BuildIndex {
+        /// Resource URIs to index
+        #[arg(required = true)]
+        uris: Vec<String>,
+        /// Wait for queued processing to complete
+        #[arg(long)]
+        wait: bool,
+        /// Wait timeout in seconds
+        #[arg(long)]
+        timeout: Option<f64>,
+    },
+    /// Summarize existing resources
+    Summarize {
+        /// Resource URIs to summarize
+        #[arg(required = true)]
+        uris: Vec<String>,
+        /// Wait for queued processing to complete
+        #[arg(long)]
+        wait: bool,
+        /// Wait timeout in seconds
+        #[arg(long)]
+        timeout: Option<f64>,
+        /// Only generate summaries, do not vectorize
+        #[arg(long)]
+        no_vectorize: bool,
+    },
     /// Interactive TUI file explorer
     Tui {
         /// Viking URI to start browsing (default: viking://)
@@ -603,6 +630,12 @@ async fn main() {
             println!("{}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
+        Commands::BuildIndex { uris, wait, timeout } => {
+            handle_build_index(uris, wait, timeout, ctx).await
+        }
+        Commands::Summarize { uris, wait, timeout, no_vectorize } => {
+            handle_summarize(uris, wait, timeout, no_vectorize, ctx).await
+        }
         Commands::Read { uri } => handle_read(uri, ctx).await,
         Commands::Abstract { uri } => handle_abstract(uri, ctx).await,
         Commands::Overview { uri } => handle_overview(uri, ctx).await,
@@ -712,6 +745,58 @@ async fn handle_add_skill(
     commands::resources::add_skill(
         &client, &data, wait, timeout, ctx.output_format, ctx.compact
     ).await
+}
+
+async fn handle_build_index(
+    uris: Vec<String>,
+    wait: bool,
+    timeout: Option<f64>,
+    ctx: CliContext,
+) -> Result<()> {
+    let params = if uris.is_empty() {
+        String::new()
+    } else {
+        uris.join(" ")
+    };
+    print_command_echo("ov build-index", &params, ctx.config.echo_command);
+
+    let client = ctx.get_client();
+    commands::resources::build_index(
+        &client,
+        uris,
+        wait,
+        timeout,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
+}
+
+async fn handle_summarize(
+    uris: Vec<String>,
+    wait: bool,
+    timeout: Option<f64>,
+    no_vectorize: bool,
+    ctx: CliContext,
+) -> Result<()> {
+    let params = if uris.is_empty() {
+        String::new()
+    } else {
+        uris.join(" ")
+    };
+    print_command_echo("ov summarize", &params, ctx.config.echo_command);
+
+    let client = ctx.get_client();
+    commands::resources::summarize(
+        &client,
+        uris,
+        wait,
+        timeout,
+        no_vectorize,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
 }
 
 async fn handle_relations(uri: String, ctx: CliContext) -> Result<()> {

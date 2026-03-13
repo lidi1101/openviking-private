@@ -17,10 +17,183 @@ Rust CLI 独立发布能力完全保留，用户可通过以下方式获取：
 - 包管理器（未来）
 """
 
+import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 from shutil import which
+
+
+DLL_NOT_FOUND_EXIT_CODE = 0xC0000135
+PYTHON_FALLBACK_COMMANDS = {"build-index", "summarize"}
+
+
+def _extract_option(args: list[str], name: str) -> tuple[bool, list[str]]:
+    remaining: list[str] = []
+    found = False
+    for arg in args:
+        if arg == name:
+            found = True
+            continue
+        remaining.append(arg)
+    return found, remaining
+
+
+def _extract_option_value(args: list[str], name: str) -> tuple[str | None, list[str]]:
+    remaining: list[str] = []
+    value: str | None = None
+    skip_next = False
+
+    for idx, arg in enumerate(args):
+        if skip_next:
+            skip_next = False
+            continue
+
+        if arg == name:
+            if idx + 1 >= len(args):
+                raise SystemExit(f"Error: {name} requires a value")
+            value = args[idx + 1]
+            skip_next = True
+            continue
+
+        if arg.startswith(f"{name}="):
+            value = arg.split("=", 1)[1]
+            continue
+
+        remaining.append(arg)
+
+    return value, remaining
+
+
+def _python_http_fallback(argv: list[str]) -> int:
+    if len(argv) < 2 or argv[1] not in PYTHON_FALLBACK_COMMANDS:
+        return -1
+
+    command = argv[1]
+    args = argv[2:]
+
+    wait, args = _extract_option(args, "--wait")
+    no_vectorize, args = _extract_option(args, "--no-vectorize")
+    compact, args = _extract_option(args, "--compact")
+    timeout_str, args = _extract_option_value(args, "--timeout")
+    output_format, args = _extract_option_value(args, "--output")
+
+    if command == "build-index" and no_vectorize:
+        raise SystemExit("Error: --no-vectorize is only valid for 'ov summarize'")
+
+    resource_uris = [arg for arg in args if not arg.startswith("-")]
+    if not resource_uris:
+        raise SystemExit(f"Error: 'ov {command}' requires at least one resource URI")
+
+    timeout = float(timeout_str) if timeout_str else None
+
+    from openviking_cli.client.sync_http import SyncHTTPClient
+
+    client = SyncHTTPClient()
+    client.initialize()
+    try:
+        if command == "build-index":
+            result = client.build_index(resource_uris, wait=wait, timeout=timeout)
+        else:
+            result = client.summarize(
+                resource_uris,
+                wait=wait,
+                timeout=timeout,
+                skip_vectorization=no_vectorize,
+            )
+    finally:
+        client.close()
+
+    if output_format == "json":
+        if compact:
+            print(
+                json.dumps(
+                    {"ok": True, "result": result},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
+        else:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+
+    return 0
+
+
+def _candidate_runtime_dirs() -> list[str]:
+    candidates: list[str] = []
+
+    env_path = os.environ.get("PATH", "")
+    path_entries = env_path.split(os.pathsep) if env_path else []
+
+    gcc_path = which("gcc")
+    if gcc_path:
+        candidates.append(str(Path(gcc_path).resolve().parent))
+
+    conda_prefix = os.environ.get("CONDA_PREFIX")
+    if conda_prefix:
+        candidates.extend(
+            [
+                str(Path(conda_prefix) / "Library" / "mingw-w64" / "bin"),
+                str(Path(conda_prefix) / "Library" / "bin"),
+                str(Path(conda_prefix) / "Scripts"),
+            ]
+        )
+
+    candidates.extend(
+        [
+            r"C:\msys64\ucrt64\bin",
+            r"C:\msys64\mingw64\bin",
+        ]
+    )
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not candidate:
+            continue
+        candidate_path = Path(candidate)
+        normalized_candidate = str(candidate_path)
+        if (
+            candidate_path.exists()
+            and normalized_candidate not in seen
+            and normalized_candidate not in path_entries
+        ):
+            seen.add(normalized_candidate)
+            normalized.append(normalized_candidate)
+    return normalized
+
+
+def _run_native_binary(binary_path: Path) -> int:
+    args = [str(binary_path)] + sys.argv[1:]
+    child_env = os.environ.copy()
+    extra_runtime_dirs = _candidate_runtime_dirs()
+    if extra_runtime_dirs:
+        child_env["PATH"] = os.pathsep.join(extra_runtime_dirs + [child_env.get("PATH", "")])
+
+    if sys.platform == "win32":
+        exit_code = subprocess.call(args, env=child_env)
+        if exit_code == DLL_NOT_FOUND_EXIT_CODE:
+            print(
+                "错误: ov.exe 启动失败，缺少 GNU 运行时 DLL。"
+                "请重新激活 conda 环境，或确认以下目录在 PATH 中: "
+                "C:\\msys64\\ucrt64\\bin / C:\\msys64\\mingw64\\bin / %CONDA_PREFIX%\\Library\\mingw-w64\\bin",
+                file=sys.stderr,
+            )
+        return exit_code
+    os.execv(str(binary_path), args)
+    return 0
+
+
+def _is_self_binary(candidate_path: Path) -> bool:
+    if not sys.argv or not sys.argv[0]:
+        return False
+    try:
+        return candidate_path == Path(sys.argv[0]).resolve()
+    except Exception:
+        return False
 
 
 def main():
@@ -33,13 +206,15 @@ def main():
     2. PATH 查找：系统全局安装的 ov
     """
     # 0. 检查开发环境（仅在直接运行脚本时有效）
+    fallback_exit_code = _python_http_fallback(sys.argv)
+    if fallback_exit_code >= 0:
+        return fallback_exit_code
+
     try:
         # __file__ is openviking_cli/rust_cli.py, so parent is openviking_cli directory
         dev_binary = Path(__file__).parent.parent / "target" / "release" / "ov"
         if dev_binary.exists() and os.access(dev_binary, os.X_OK):
-            # 找到后立即 execv，不返回
-            args = [str(dev_binary)] + sys.argv[1:]
-            os.execv(str(dev_binary), args)
+            return _run_native_binary(dev_binary)
     except Exception:
         pass
 
@@ -51,9 +226,7 @@ def main():
         for binary_name in ["ov", "ov.exe"]:
             binary = package_bin / binary_name
             if binary.exists() and os.access(binary, os.X_OK):
-                # 找到后立即 execv，不返回
-                args = [str(binary)] + sys.argv[1:]
-                os.execv(str(binary), args)
+                return _run_native_binary(binary)
     except Exception:
         pass
 
@@ -63,12 +236,12 @@ def main():
         # 检查文件是否是 Python 脚本（避免无限循环）
         try:
             candidate_path = Path(path_binary).resolve()
-            with open(candidate_path, "rb") as f:
-                first_bytes = f.read(2)
-            # Skip if it starts with #! (shebang, likely Python script)
-            if first_bytes != b"#!":
-                args = [path_binary] + sys.argv[1:]
-                os.execv(path_binary, args)
+            if not _is_self_binary(candidate_path):
+                with open(candidate_path, "rb") as f:
+                    first_bytes = f.read(2)
+                # Skip if it starts with #! (shebang, likely Python script)
+                if first_bytes != b"#!":
+                    return _run_native_binary(candidate_path)
         except Exception:
             pass
 

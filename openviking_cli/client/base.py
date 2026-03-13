@@ -57,6 +57,16 @@ class BaseClient(ABC):
         """Wait for all processing to complete."""
         ...
 
+    @abstractmethod
+    async def build_index(self, resource_uris: List[str], **kwargs) -> Dict[str, Any]:
+        """Build vector index for existing resources."""
+        ...
+
+    @abstractmethod
+    async def summarize(self, resource_uris: List[str], **kwargs) -> Dict[str, Any]:
+        """Summarize existing resources."""
+        ...
+
     # ============= File System =============
 
     @abstractmethod

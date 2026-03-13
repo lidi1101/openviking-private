@@ -385,6 +385,42 @@ class AsyncHTTPClient(BaseClient):
         )
         return self._handle_response(response)
 
+    async def build_index(
+        self,
+        resource_uris: List[str],
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Build vector index for existing resources."""
+        response = await self._http.post(
+            "/api/v1/resources/build_index",
+            json={
+                "resource_uris": resource_uris,
+                "wait": wait,
+                "timeout": timeout,
+            },
+        )
+        return self._handle_response(response)
+
+    async def summarize(
+        self,
+        resource_uris: List[str],
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        skip_vectorization: bool = False,
+    ) -> Dict[str, Any]:
+        """Summarize existing resources."""
+        response = await self._http.post(
+            "/api/v1/resources/summarize",
+            json={
+                "resource_uris": resource_uris,
+                "wait": wait,
+                "timeout": timeout,
+                "skip_vectorization": skip_vectorization,
+            },
+        )
+        return self._handle_response(response)
+
     # ============= File System =============
 
     async def ls(
