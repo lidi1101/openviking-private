@@ -1,7 +1,9 @@
 [CmdletBinding()]
 param(
     [switch]$Clean,
-    [switch]$RebuildArtifacts
+    [switch]$RebuildArtifacts,
+    [ValidateSet("onefile", "onedir")]
+    [string]$Mode = "onefile"
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,9 +12,13 @@ $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $specPath = Join-Path $projectRoot "OpenVikingServer.spec"
 $distDir = Join-Path $projectRoot "dist"
 $buildDir = Join-Path $projectRoot "build"
-$exePath = Join-Path $distDir "OpenVikingServer\OpenVikingServer.exe"
+$exePath = if ($Mode -eq "onedir") {
+    Join-Path $distDir "OpenVikingServer\OpenVikingServer.exe"
+} else {
+    Join-Path $distDir "OpenVikingServer.exe"
+}
+$legacyOneDirPath = Join-Path $distDir "OpenVikingServer"
 $requiredArtifacts = @(
-    (Join-Path $projectRoot "openviking\bin\agfs-server.exe"),
     (Join-Path $projectRoot "openviking\lib\libagfsbinding.dll")
 )
 
@@ -70,22 +76,145 @@ function Get-MissingArtifacts {
     return $requiredArtifacts | Where-Object { -not (Test-Path $_) }
 }
 
+function Test-CommandAvailable {
+    param(
+        [string]$CommandName
+    )
+
+    return $null -ne (Get-Command $CommandName -ErrorAction SilentlyContinue)
+}
+
+function Assert-PackagingPrerequisites {
+    param(
+        [bool]$NeedsArtifactBuild
+    )
+
+    $missing = @()
+
+    if (-not (Test-CommandAvailable "pip")) {
+        $missing += "pip"
+    }
+
+    try {
+        Invoke-Python -PythonCmd $pythonCmd -Arguments @("-c", "import PyInstaller")
+    } catch {
+        $missing += "PyInstaller (install with: pip install -U pyinstaller)"
+    }
+
+    if ($NeedsArtifactBuild) {
+        foreach ($tool in @("go", "cmake", "gcc", "g++")) {
+            if (-not (Test-CommandAvailable $tool)) {
+                $missing += $tool
+            }
+        }
+    }
+
+    if ($missing.Count -gt 0) {
+        $items = ($missing | ForEach-Object { "- $_" }) -join "`n"
+        throw @"
+Missing packaging prerequisites:
+$items
+
+Install the missing tools and retry.
+"@
+    }
+}
+
+function Resolve-OvConfigPath {
+    if ($env:OPENVIKING_CONFIG_FILE -and (Test-Path $env:OPENVIKING_CONFIG_FILE)) {
+        return (Resolve-Path $env:OPENVIKING_CONFIG_FILE).Path
+    }
+
+    $userConfig = Join-Path $env:USERPROFILE ".openviking\ov.conf"
+    if (Test-Path $userConfig) {
+        return $userConfig
+    }
+
+    return $null
+}
+
+function Assert-OpenVikingConfig {
+    $configPath = Resolve-OvConfigPath
+    if (-not $configPath) {
+        throw @"
+OpenViking runtime config not found.
+
+Expected one of:
+- %OPENVIKING_CONFIG_FILE%
+- $env:USERPROFILE\.openviking\ov.conf
+
+Provide a valid ov.conf before packaging so the runtime configuration is known.
+"@
+    }
+
+    Write-Host "Using ov.conf: $configPath"
+
+    try {
+        $config = Get-Content -Path $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    } catch {
+        throw "Failed to parse ov.conf as JSON: $configPath"
+    }
+
+    $agfsMode = $config.storage.agfs.mode
+    if (-not $agfsMode) {
+        throw "ov.conf is missing storage.agfs.mode: $configPath"
+    }
+
+    if ($agfsMode -ne "binding-client") {
+        throw @"
+ov.conf is not aligned with the current packaging route.
+
+Expected:
+- storage.agfs.mode = `"binding-client`"
+
+Found:
+- storage.agfs.mode = `"$agfsMode`"
+
+Update the config or switch your packaging approach.
+"@
+    }
+}
+
+function Remove-PathIfExists {
+    param(
+        [string]$PathToRemove
+    )
+
+    if (-not (Test-Path $PathToRemove)) {
+        return
+    }
+
+    try {
+        Remove-Item -Recurse -Force $PathToRemove
+    } catch {
+        throw @"
+Failed to remove path: $PathToRemove
+
+This usually means an old executable or DLL is still running from that location.
+Close OpenVikingServer.exe and any process using files under this path, then retry.
+"@
+    }
+}
+
 Write-Host "Project root: $projectRoot"
 
 $pythonCmd = Get-PythonCommand
 Write-Host "Using Python: $pythonCmd"
+Write-Host "Build mode: $Mode"
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
+$env:OV_PYINSTALLER_MODE = $Mode
 
 if (-not (Test-Path $specPath)) {
     throw "Spec file not found: $specPath"
 }
 
 if ($Clean) {
-    if (Test-Path $buildDir) {
-        Remove-Item -Recurse -Force $buildDir
-    }
-    if (Test-Path $distDir) {
-        Remove-Item -Recurse -Force $distDir
-    }
+    Remove-PathIfExists -PathToRemove $buildDir
+    Remove-PathIfExists -PathToRemove $distDir
+} elseif ($Mode -eq "onefile" -and (Test-Path $legacyOneDirPath)) {
+    Write-Host "Removing legacy onedir output..."
+    Remove-PathIfExists -PathToRemove $legacyOneDirPath
 }
 
 if ($RebuildArtifacts) {
@@ -100,8 +229,10 @@ if ($RebuildArtifacts) {
 Write-Host "Checking build artifacts..."
 $missingArtifacts = Get-MissingArtifacts
 if ($missingArtifacts.Count -gt 0) {
+    Assert-PackagingPrerequisites -NeedsArtifactBuild $true
     Write-Host "Missing runtime artifacts detected. Building them via editable install..."
     $env:OV_DISABLE_OV_CLI = "1"
+    $env:OV_DISABLE_AGFS_SERVER = "1"
     Invoke-Python -PythonCmd $pythonCmd -Arguments @("-m", "pip", "install", "-e", ".")
     $missingArtifacts = Get-MissingArtifacts
 }
@@ -115,8 +246,10 @@ Automatic build was attempted with OV_DISABLE_OV_CLI=1, but the artifacts are st
 "@
 }
 
-Write-Host "Checking PyInstaller..."
-Invoke-Python -PythonCmd $pythonCmd -Arguments @("-c", "import PyInstaller")
+Write-Host "Checking packaging prerequisites..."
+Assert-PackagingPrerequisites -NeedsArtifactBuild $false
+Write-Host "Checking runtime config..."
+Assert-OpenVikingConfig
 
 Write-Host "Building OpenVikingServer.exe..."
 Invoke-Python -PythonCmd $pythonCmd -Arguments @("-m", "PyInstaller", "--noconfirm", $specPath)

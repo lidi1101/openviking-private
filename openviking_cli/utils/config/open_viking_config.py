@@ -286,7 +286,12 @@ def is_valid_openviking_config(config: OpenVikingConfig) -> bool:
     is_service_mode = config.storage.vectordb.backend == "http"
     is_agfs_local = config.storage.agfs.backend == "local"
 
-    if is_service_mode and is_agfs_local and not config.storage.agfs.url:
+    if (
+        is_service_mode
+        and is_agfs_local
+        and config.storage.agfs.mode == "http-client"
+        and not config.storage.agfs.url
+    ):
         errors.append(
             "Service mode (VectorDB backend='http') with local AGFS backend requires 'agfs.url' to be set. "
             "Consider using AGFS backend='s3' or provide remote AGFS URL."

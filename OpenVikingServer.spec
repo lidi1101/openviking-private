@@ -1,10 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
 
 
 PROJECT_ROOT = Path(SPECPATH).resolve()
+BUILD_MODE = os.environ.get("OV_PYINSTALLER_MODE", "onefile").strip().lower()
+if BUILD_MODE not in {"onefile", "onedir"}:
+    raise ValueError(f"Unsupported OV_PYINSTALLER_MODE: {BUILD_MODE}")
 
 
 def relpath(path: Path) -> str:
@@ -26,15 +30,7 @@ datas += collect_data_files("litellm", include_py_files=False)
 binaries += collect_dynamic_libs("openviking")
 binaries += collect_dynamic_libs("litellm")
 
-agfs_server = PROJECT_ROOT / "openviking" / "bin" / "agfs-server.exe"
 agfs_binding = PROJECT_ROOT / "openviking" / "lib" / "libagfsbinding.dll"
-ov_binary = PROJECT_ROOT / "openviking" / "bin" / "ov.exe"
-
-if agfs_server.exists():
-    datas.append((relpath(agfs_server), "openviking/bin"))
-
-if ov_binary.exists():
-    datas.append((relpath(ov_binary), "openviking/bin"))
 
 if agfs_binding.exists():
     binaries.append((str(agfs_binding), "openviking/lib"))
@@ -55,30 +51,54 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 
-exe = EXE(
-    pyz,
-    a.scripts,
-    [],
-    exclude_binaries=True,
-    name="OpenVikingServer",
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
-    console=True,
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-)
+if BUILD_MODE == "onefile":
+    exe = EXE(
+        pyz,
+        a.scripts,
+        a.binaries,
+        a.datas,
+        [],
+        name="OpenVikingServer",
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=True,
+        upx_exclude=[],
+        runtime_tmpdir=None,
+        console=True,
+        disable_windowed_traceback=False,
+        argv_emulation=False,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
+    )
+else:
+    exe = EXE(
+        pyz,
+        a.scripts,
+        [],
+        exclude_binaries=True,
+        name="OpenVikingServer",
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=True,
+        upx_exclude=[],
+        runtime_tmpdir=None,
+        console=True,
+        disable_windowed_traceback=False,
+        argv_emulation=False,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
+    )
 
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.datas,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    name="OpenVikingServer",
-)
+    coll = COLLECT(
+        exe,
+        a.binaries,
+        a.datas,
+        strip=False,
+        upx=True,
+        upx_exclude=[],
+        name="OpenVikingServer",
+    )
