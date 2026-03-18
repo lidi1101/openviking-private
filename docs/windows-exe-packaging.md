@@ -34,6 +34,12 @@ cd d:\HClawCode\HClawMemory\ClawMemory
 .\build_exe.ps1
 ```
 
+Equivalent batch wrapper:
+
+```bat
+build_exe.bat
+```
+
 Build as `onedir` instead of the default `onefile`:
 
 ```powershell
@@ -78,6 +84,12 @@ cd d:\HClawCode\HClawMemory\ClawMemory
 .\package_release.ps1
 ```
 
+Equivalent batch wrapper:
+
+```bat
+package_release.bat
+```
+
 To rebuild the exe first and then package:
 
 ```powershell
@@ -106,5 +118,6 @@ This produces:
 - `ov.exe` is not required for server packaging when `OV_DISABLE_OV_CLI=1` is set during build/install.
 - `onefile` still unpacks runtime files to a temporary directory at startup.
 - Use `-Mode onedir` if you want the traditional extracted app directory instead of a single executable.
+- `build_exe.bat` and `package_release.bat` are thin wrappers around the PowerShell scripts.
 - `--with-bot` still depends on `vikingbot` being available in the runtime environment.
 - If the executable exits immediately, run it from PowerShell first so you can read the error output.

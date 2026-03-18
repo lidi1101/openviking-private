@@ -39,6 +39,12 @@ cd d:\HClawCode\HClawMemory\ClawMemory
 .\build_exe.ps1
 ```
 
+对应的批处理包装脚本：
+
+```bat
+build_exe.bat
+```
+
 如果要使用 `onedir`：
 
 ```powershell
@@ -87,6 +93,12 @@ cd d:\HClawCode\HClawMemory\ClawMemory
 .\package_release.ps1
 ```
 
+对应的批处理包装脚本：
+
+```bat
+package_release.bat
+```
+
 先重打可执行文件再生成发布包：
 
 ```powershell
@@ -115,5 +127,6 @@ cd d:\HClawCode\HClawMemory\ClawMemory
 - 当设置 `OV_DISABLE_OV_CLI=1` 时，服务端打包不依赖 `ov.exe`。
 - `onefile` 模式在运行时仍会先解包到临时目录，这是正常行为。
 - 如果你希望保留传统目录结构而不是单文件，可使用 `-Mode onedir`。
+- `build_exe.bat` 和 `package_release.bat` 只是对 PowerShell 脚本的薄包装。
 - `--with-bot` 仍然要求目标环境中可用 `vikingbot`。
 - 如果程序启动后立即退出，请先在 PowerShell 中运行，以便查看错误输出。
