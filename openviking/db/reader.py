@@ -13,12 +13,24 @@ from openviking_cli.exceptions import NotFoundError
 
 from .types import Event, QueryRequest
 
+YOYO_SOURCE_URIS = {
+    "userinformation": "viking://yoyo/userinformation/default/userinformation.jsonl",
+    "usertendencies": "viking://yoyo/usertendencies/default/usertendencies.jsonl",
+}
+
+
+def normalize_source_name(source: str) -> str:
+    return "".join(ch for ch in str(source) if ch.isalnum()).casefold()
+
 
 def build_localdb_root_uri(user_space: str) -> str:
     return f"viking://user/{user_space}/memories/localdb"
 
 
 def build_events_uri(user_space: str, source: str) -> str:
+    mapped_uri = YOYO_SOURCE_URIS.get(normalize_source_name(source))
+    if mapped_uri:
+        return mapped_uri
     return f"{build_localdb_root_uri(user_space)}/{source}/events.jsonl"
 
 
