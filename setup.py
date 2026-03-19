@@ -1,3 +1,4 @@
+import ctypes
 import json
 import locale
 import os
@@ -11,16 +12,90 @@ import pybind11
 from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
 
-CMAKE_PATH = shutil.which("cmake") or "cmake"
-C_COMPILER_PATH = shutil.which("gcc") or "gcc"
-CXX_COMPILER_PATH = shutil.which("g++") or "g++"
 ENGINE_SOURCE_DIR = "src/"
+
+
+def _iter_winget_package_dirs(package_prefix):
+    root = Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WinGet" / "Packages"
+    if not root.exists():
+        return []
+    return sorted(root.glob(f"{package_prefix}*"), reverse=True)
+
+
+def _resolve_tool_path(tool_names, *, extra_candidates=None, winget_candidates=None):
+    for tool_name in tool_names:
+        resolved = shutil.which(tool_name)
+        if resolved:
+            return resolved
+
+    candidates = [Path(candidate) for candidate in (extra_candidates or [])]
+    for package_prefix, relative_dir in winget_candidates or []:
+        for package_dir in _iter_winget_package_dirs(package_prefix):
+            for tool_name in tool_names:
+                candidates.append(package_dir / relative_dir / tool_name)
+
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+
+    return tool_names[0]
+
+
+def _prepend_tool_dirs(*tool_paths):
+    current_path = os.environ.get("PATH", "")
+    existing_parts = current_path.split(os.pathsep) if current_path else []
+    prepended = []
+    for tool_path in tool_paths:
+        tool_dir = str(Path(tool_path).resolve().parent)
+        if tool_dir not in prepended:
+            prepended.append(tool_dir)
+    os.environ["PATH"] = os.pathsep.join(prepended + existing_parts)
+
+
+CMAKE_PATH = _resolve_tool_path(
+    ["cmake", "cmake.exe"],
+    extra_candidates=[r"C:\Program Files\CMake\bin\cmake.exe"],
+    winget_candidates=[
+        ("Kitware.CMake", "bin"),
+        ("BrechtSanders.WinLibs.POSIX.UCRT", "mingw64/bin"),
+    ],
+)
+C_COMPILER_PATH = _resolve_tool_path(
+    ["gcc", "gcc.exe"],
+    winget_candidates=[("BrechtSanders.WinLibs.POSIX.UCRT", "mingw64/bin")],
+)
+CXX_COMPILER_PATH = _resolve_tool_path(
+    ["g++", "g++.exe"],
+    winget_candidates=[("BrechtSanders.WinLibs.POSIX.UCRT", "mingw64/bin")],
+)
+_prepend_tool_dirs(CMAKE_PATH, C_COMPILER_PATH, CXX_COMPILER_PATH)
 
 
 def _console_safe(text):
     """Return text that can always be printed to the current console."""
     encoding = getattr(sys.stdout, "encoding", None) or locale.getpreferredencoding(False) or "utf-8"
     return text.encode(encoding, errors="replace").decode(encoding, errors="replace")
+
+
+def _is_loadable_windows_dll(path: Path) -> bool:
+    """Return whether a Windows DLL can be loaded by the current process."""
+    if sys.platform != "win32":
+        return True
+    if not path.exists():
+        return False
+
+    dll_dir = path.parent.resolve()
+    add_dir = getattr(os, "add_dll_directory", None)
+    handle = add_dir(str(dll_dir)) if add_dir else None
+    try:
+        ctypes.CDLL(str(path))
+        return True
+    except OSError as exc:
+        print(f"[Warning] Failed to load {path}: {exc}")
+        return False
+    finally:
+        if handle is not None:
+            handle.close()
 
 
 class OpenVikingBuildExt(build_ext):
@@ -166,7 +241,9 @@ class OpenVikingBuildExt(build_ext):
                 return
 
         if os.environ.get("OV_SKIP_AGFS_BUILD") == "1":
-            if agfs_target_lib.exists() and (not require_server_binary or agfs_target_binary.exists()):
+            if _is_loadable_windows_dll(agfs_target_lib) and (
+                not require_server_binary or agfs_target_binary.exists()
+            ):
                 print("[OK] Skipping AGFS build, using existing artifacts")
                 return
             print("[Warning] OV_SKIP_AGFS_BUILD=1 but artifacts are missing. Will try to build.")
@@ -256,7 +333,9 @@ class OpenVikingBuildExt(build_ext):
                 print(_console_safe(f"[Error] {error_msg}"))
                 raise RuntimeError(error_msg)
         else:
-            if agfs_target_lib.exists() and (not require_server_binary or agfs_target_binary.exists()):
+            if _is_loadable_windows_dll(agfs_target_lib) and (
+                not require_server_binary or agfs_target_binary.exists()
+            ):
                 print("[Info] AGFS artifacts already exist locally. Skipping source build.")
             elif not agfs_server_dir.exists():
                 print(f"[Warning] AGFS source directory not found at {agfs_server_dir}")
