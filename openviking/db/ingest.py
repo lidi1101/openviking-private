@@ -11,13 +11,14 @@ from openviking_cli.session.user_id import UserIdentifier
 
 from .config import load_mapping_config
 from .normalize import build_event
+from .reader import build_events_uri
 from .sqlite_reader import iter_rows, open_sqlite_readonly
 from .types import IngestItemReport, IngestReport, IngestRequest
 from .writer import append_jsonl
 
 
 def _default_output_uri(request: IngestRequest) -> str:
-    return f"viking://user/{request.user_space}/memories/localdb/{request.source}/events.jsonl"
+    return build_events_uri(request.user_space, request.source)
 
 
 def _resolve_output_uri(request: IngestRequest, raw_output_uri: Optional[str]) -> str:

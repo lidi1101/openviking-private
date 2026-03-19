@@ -61,3 +61,37 @@ class Event:
     entities: List[Dict[str, Any]] = field(default_factory=list)
     evidence: Dict[str, Any] = field(default_factory=dict)
     privacy: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class QueryRequest:
+    user_space: str
+    source: str
+    event_types: List[str] = field(default_factory=list)
+    ids: List[str] = field(default_factory=list)
+    since: Optional[str] = None
+    until: Optional[str] = None
+    keyword: Optional[str] = None
+    offset: int = 0
+    limit: int = 100
+    include_evidence: bool = True
+
+
+@dataclass
+class GetEventRequest:
+    user_space: str
+    source: str
+    event_id: str
+    include_evidence: bool = True
+
+
+@dataclass
+class QueryResult:
+    user_space: str
+    source: str
+    total: int
+    offset: int
+    limit: int
+    has_more: bool
+    items: List[Event] = field(default_factory=list)
+    errors: List[str] = field(default_factory=list)
