@@ -22,6 +22,7 @@ from openviking.models.embedder.base import (
     HybridEmbedderBase,
     SparseEmbedderBase,
 )
+from openviking.models.embedder.honor_embedders import HonorDenseEmbedder
 from openviking.models.embedder.jina_embedders import JinaDenseEmbedder
 from openviking.models.embedder.openai_embedders import OpenAIDenseEmbedder
 from openviking.models.embedder.vikingdb_embedders import (
@@ -45,6 +46,8 @@ __all__ = [
     "CompositeHybridEmbedder",
     # Jina AI implementations
     "JinaDenseEmbedder",
+    # Honor implementations
+    "HonorDenseEmbedder",
     # OpenAI implementations
     "OpenAIDenseEmbedder",
     # Volcengine implementations

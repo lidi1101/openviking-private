@@ -102,10 +102,10 @@ def test_embedding_validation():
     # Test 1: no embedder config
     print("\n1. Test no embedder config...")
     try:
-        _ = EmbeddingConfig()
-        print("   Should fail but passed")
+        config = EmbeddingConfig()
+        print(f"   Pass (internal dimension={config.dimension})")
     except ValueError as e:
-        print(f"   Correctly raised exception: {e}")
+        print(f"   Fail: {e}")
 
     # Test 2: OpenAI provider missing api_key
     print("\n2. Test OpenAI provider missing api_key...")

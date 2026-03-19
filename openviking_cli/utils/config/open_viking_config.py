@@ -131,6 +131,7 @@ class OpenVikingConfig(BaseModel):
         # Remove sections managed by other loaders (e.g. server config)
         config_copy.pop("server", None)
         config_copy.pop("bot", None)
+        config_copy.pop("embedding", None)
 
         # Handle parser configurations from nested "parsers" section
         parser_configs = {}
@@ -349,9 +350,8 @@ def initialize_openviking_config(
         config.storage.agfs.path = resolved
         config.storage.vectordb.path = resolved
 
-    # Ensure vector dimension is synced if not set in storage
-    if config.storage.vectordb.dimension == 0:
-        config.storage.vectordb.dimension = config.embedding.dimension
+    # Built-in embedding path uses a fixed internal dimension.
+    config.storage.vectordb.dimension = config.embedding.dimension
 
     # Validate configuration
     if not is_valid_openviking_config(config):
