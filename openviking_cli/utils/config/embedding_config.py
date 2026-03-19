@@ -113,10 +113,6 @@ class EmbeddingConfig(BaseModel):
     @model_validator(mode="after")
     def validate_config(self):
         """Validate configuration completeness and consistency"""
-        if not self.dense and not self.sparse and not self.hybrid:
-            raise ValueError(
-                "At least one embedding configuration (dense, sparse, or hybrid) is required"
-            )
         return self
 
     def _create_embedder(self, provider: str, embedder_type: str, config: EmbeddingModelConfig):
@@ -251,22 +247,9 @@ class EmbeddingConfig(BaseModel):
         Raises:
             ValueError: If configuration is invalid or unsupported
         """
-        from openviking.models.embedder import CompositeHybridEmbedder
+        from openviking.models.embedder.internal_embedder import get_internal_embedder
 
-        if self.hybrid:
-            return self._create_embedder(self.hybrid.provider.lower(), "hybrid", self.hybrid)
-
-        if self.dense and self.sparse:
-            dense_embedder = self._create_embedder(self.dense.provider.lower(), "dense", self.dense)
-            sparse_embedder = self._create_embedder(
-                self.sparse.provider.lower(), "sparse", self.sparse
-            )
-            return CompositeHybridEmbedder(dense_embedder, sparse_embedder)
-
-        if self.dense:
-            return self._create_embedder(self.dense.provider.lower(), "dense", self.dense)
-
-        raise ValueError("No embedding configuration found (dense, sparse, or hybrid)")
+        return get_internal_embedder()
 
     @property
     def dimension(self) -> int:
@@ -275,8 +258,6 @@ class EmbeddingConfig(BaseModel):
 
     def get_dimension(self) -> int:
         """Helper to get dimension from active config"""
-        if self.hybrid:
-            return self.hybrid.dimension or 2048
-        if self.dense:
-            return self.dense.dimension or 2048
-        return 2048
+        from openviking.models.embedder.internal_embedder import INTERNAL_EMBEDDING_DIMENSION
+
+        return INTERNAL_EMBEDDING_DIMENSION
