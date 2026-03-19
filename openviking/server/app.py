@@ -20,6 +20,7 @@ from openviking.server.routers import (
     content_router,
     debug_router,
     filesystem_router,
+    localdb_router,
     observer_router,
     pack_router,
     relations_router,
@@ -170,6 +171,7 @@ def create_app(
     app.include_router(resources_router)
     app.include_router(filesystem_router)
     app.include_router(content_router)
+    app.include_router(localdb_router)
     app.include_router(search_router)
     app.include_router(relations_router)
     app.include_router(sessions_router)

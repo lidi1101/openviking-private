@@ -8,6 +8,7 @@ from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.exceptions import NotFoundError
 
 from .reader import (
+    YOYO_SOURCE_URIS,
     build_localdb_root_uri,
     iter_event_dicts,
     match_event,
@@ -19,13 +20,14 @@ from .types import Event, GetEventRequest, QueryRequest, QueryResult
 
 async def list_sources(user_space: str, ctx: RequestContext) -> list[str]:
     root_uri = build_localdb_root_uri(user_space)
-    try:
-        entries = await get_viking_fs().ls(root_uri, ctx=ctx)
-    except (FileNotFoundError, NotFoundError):
-        return []
-
-    sources: list[str] = []
+    sources: set[str] = set()
     viking_fs = get_viking_fs()
+
+    try:
+        entries = await viking_fs.ls(root_uri, ctx=ctx)
+    except (FileNotFoundError, NotFoundError):
+        entries = []
+
     for entry in entries:
         if not entry.get("isDir"):
             continue
@@ -41,7 +43,15 @@ async def list_sources(user_space: str, ctx: RequestContext) -> list[str]:
             for source_entry in source_entries
         ):
             continue
-        sources.append(name)
+        sources.add(name)
+
+    for source_name, uri in YOYO_SOURCE_URIS.items():
+        try:
+            content = await viking_fs.read_file(uri, ctx=ctx)
+        except (FileNotFoundError, NotFoundError):
+            continue
+        if str(content).strip():
+            sources.add(source_name)
 
     return sorted(sources)
 

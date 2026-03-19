@@ -11,37 +11,59 @@ from openviking_cli.session.user_id import UserIdentifier
 
 from .config import load_mapping_config
 from .normalize import build_event
-from .reader import build_events_uri
 from .sqlite_reader import iter_rows, open_sqlite_readonly
 from .types import IngestItemReport, IngestReport, IngestRequest
 from .writer import append_jsonl
 
+YOYO_SQLITE_DB_PATH = r"D:\HONOR Share\YOYO History\yoyochat2.db"
+YOYO_TABLE_OUTPUT_URIS = {
+    "userinformation": "viking://yoyo/userinformation/default/userinformation.jsonl",
+    "usertendencies": "viking://yoyo/usertendencies/default/usertendencies.jsonl",
+}
 
-def _default_output_uri(request: IngestRequest) -> str:
-    return build_events_uri(request.user_space, request.source)
+
+def _normalize_table_name(table: Optional[str]) -> str:
+    if not table:
+        return ""
+    return "".join(ch for ch in table if ch.isalnum()).casefold()
 
 
-def _resolve_output_uri(request: IngestRequest, raw_output_uri: Optional[str]) -> str:
+def _resolve_db_path(_: IngestRequest) -> str:
+    return YOYO_SQLITE_DB_PATH
+
+
+def _resolve_output_uri(
+    request: IngestRequest,
+    *,
+    table: Optional[str],
+    raw_output_uri: Optional[str],
+    db_path: str,
+) -> str:
     if not raw_output_uri:
-        return _default_output_uri(request)
+        table_key = _normalize_table_name(table)
+        mapped_uri = YOYO_TABLE_OUTPUT_URIS.get(table_key)
+        if mapped_uri:
+            return mapped_uri
+        raise ValueError(f"extract table is not mapped to a VikingFS target: {table!r}")
     return raw_output_uri.format(
         user_space=request.user_space,
         source=request.source,
-        db_path=request.db_path,
+        db_path=db_path,
     )
 
 
 async def ingest(request: IngestRequest) -> IngestReport:
-    if not os.path.exists(request.db_path):
-        raise FileNotFoundError(f"db not found: {request.db_path}")
+    db_path = _resolve_db_path(request)
+    if not os.path.exists(db_path):
+        raise FileNotFoundError(f"db not found: {db_path}")
 
-    output_uri = _default_output_uri(request)
+    output_uri = ""
 
     items = load_mapping_config(request.config_path)
 
-    report = IngestReport(db_path=request.db_path, output_uri=output_uri)
+    report = IngestReport(db_path=db_path, output_uri=output_uri)
 
-    conn, opened_via_copy, _tmp = open_sqlite_readonly(request.db_path)
+    conn, opened_via_copy, _tmp = open_sqlite_readonly(db_path)
     report.opened_via_copy = opened_via_copy
 
     # Use ROOT role for local CLI import; user/account are derived from user_space string.
@@ -54,11 +76,8 @@ async def ingest(request: IngestRequest) -> IngestReport:
 
     try:
         for item in items:
-            item_output_uri = _resolve_output_uri(request, item.output_uri)
-            item_report = IngestItemReport(id=item.id, output_uri=item_output_uri)
+            item_report = IngestItemReport(id=item.id)
             report.items.append(item_report)
-            if item_output_uri not in report.output_uris:
-                report.output_uris.append(item_output_uri)
 
             params: Dict[str, Any] = {}
             if request.since is not None:
@@ -66,6 +85,18 @@ async def ingest(request: IngestRequest) -> IngestReport:
                 params["since_ts"] = request.since
 
             try:
+                item_output_uri = _resolve_output_uri(
+                    request,
+                    table=item.table,
+                    raw_output_uri=item.output_uri,
+                    db_path=db_path,
+                )
+                item_report.output_uri = item_output_uri
+                if item_output_uri not in report.output_uris:
+                    report.output_uris.append(item_output_uri)
+                    if not report.output_uri:
+                        report.output_uri = item_output_uri
+
                 for row in iter_rows(conn, item.sql, params=params):
                     item_report.rows += 1
                     report.total_rows += 1
@@ -78,7 +109,7 @@ async def ingest(request: IngestRequest) -> IngestReport:
                         row=row_dict,
                         columns=item.columns,
                         redact=request.redact,
-                        db_path=request.db_path,
+                        db_path=db_path,
                     )
 
                     if len(report.samples) < 5:

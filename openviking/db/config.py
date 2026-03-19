@@ -12,10 +12,20 @@ import yaml
 from .types import ExtractItem
 
 
+def _resolve_mapping_path(config_path: str) -> Path:
+    candidate = Path(config_path).expanduser()
+    if candidate.exists():
+        return candidate
+
+    repo_relative = Path(__file__).resolve().parents[2] / candidate
+    if repo_relative.exists():
+        return repo_relative
+
+    raise FileNotFoundError(f"mapping_config not found: {config_path}")
+
+
 def load_mapping_config(config_path: str) -> List[ExtractItem]:
-    p = Path(config_path)
-    if not p.exists():
-        raise FileNotFoundError(f"mapping_config not found: {config_path}")
+    p = _resolve_mapping_path(config_path)
 
     if p.suffix.lower() in {".yaml", ".yml"}:
         data = yaml.safe_load(p.read_text(encoding="utf-8"))
