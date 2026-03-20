@@ -137,6 +137,14 @@ class VLMFactory:
 
             return OpenAIVLM(config)
 
+        elif provider == "minimax" and config.get("api_base"):
+            from .backends.openai_vlm import OpenAIVLM
+
+            # MiniMax exposes an OpenAI-compatible endpoint. Prefer the OpenAI SDK
+            # when api_base is configured to avoid LiteLLM tokenizer dependencies
+            # in frozen Windows builds.
+            return OpenAIVLM(config)
+
         else:
             from .backends.litellm_vlm import LiteLLMVLMProvider
 

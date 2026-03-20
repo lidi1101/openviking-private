@@ -3,7 +3,7 @@
 """
 File System Service for OpenViking.
 
-Provides file system operations: ls, mkdir, rm, mv, tree, stat, read, abstract, overview, grep, glob.
+Provides file system operations: ls, mkdir, rm, mv, tree, stat, read, write, abstract, overview, grep, glob.
 """
 
 from typing import Any, Dict, List, Optional
@@ -145,6 +145,16 @@ class FSService:
         """Read file content."""
         viking_fs = self._ensure_initialized()
         return await viking_fs.read_file(uri, offset=offset, limit=limit, ctx=ctx)
+
+    async def write_file(self, uri: str, content: str, ctx: RequestContext) -> None:
+        """Write plain text content to a Viking URI."""
+        viking_fs = self._ensure_initialized()
+        await viking_fs.write_file(uri, content, ctx=ctx)
+
+    async def write_file_bytes(self, uri: str, content: bytes, ctx: RequestContext) -> None:
+        """Write binary content to a Viking URI."""
+        viking_fs = self._ensure_initialized()
+        await viking_fs.write_file_bytes(uri, content, ctx=ctx)
 
     async def abstract(self, uri: str, ctx: RequestContext) -> str:
         """Read L0 abstract (.abstract.md)."""

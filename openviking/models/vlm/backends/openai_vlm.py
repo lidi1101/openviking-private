@@ -20,7 +20,7 @@ class OpenAIVLM(VLMBase):
         super().__init__(config)
         self._sync_client = None
         self._async_client = None
-        self.provider = "openai"
+        self.provider = config.get("provider") or "openai"
 
     def get_client(self):
         """Get sync client"""
