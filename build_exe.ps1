@@ -30,6 +30,11 @@ $requiredArtifacts = @(
 )
 $bundledMingwRoot = Join-Path $projectRoot "third_party\mingw64"
 $bundledMingwBin = Join-Path $bundledMingwRoot "bin"
+$bundledMingwArchives = @(
+    (Join-Path $projectRoot "third_party\mingw64.7z.001"),
+    (Join-Path $projectRoot "third_party\mingw64.7z"),
+    (Join-Path $projectRoot "third_party\mingw64.zip")
+)
 
 function Get-PythonCommand {
     $candidates = @()
@@ -140,6 +145,153 @@ function Initialize-BundledToolchain {
     Write-Host "Using bundled MinGW toolchain: $bundledMingwBin"
 }
 
+function Get-ArchiveExtractor {
+    $candidates = @(
+        "7z",
+        "7za",
+        "7zr",
+        (Join-Path ${env:ProgramFiles} "7-Zip\7z.exe"),
+        (Join-Path ${env:ProgramFiles(x86)} "7-Zip\7z.exe")
+    ) | Where-Object { $_ }
+
+    foreach ($candidate in $candidates) {
+        if ($candidate -like "*.exe") {
+            if (Test-Path $candidate) {
+                return $candidate
+            }
+            continue
+        }
+
+        $command = Get-Command $candidate -ErrorAction SilentlyContinue
+        if ($command) {
+            return $command.Source
+        }
+    }
+
+    return $null
+}
+
+function Expand-ArchiveWithShell {
+    param(
+        [string]$ArchivePath,
+        [string]$DestinationPath
+    )
+
+    $shell = New-Object -ComObject Shell.Application
+    $archiveNamespace = $shell.NameSpace($ArchivePath)
+    $destinationNamespace = $shell.NameSpace($DestinationPath)
+
+    if (-not $archiveNamespace -or -not $destinationNamespace) {
+        return $false
+    }
+
+    $destinationNamespace.CopyHere($archiveNamespace.Items(), 0x10)
+    return $true
+}
+
+function Get-BundledToolchainArchivePath {
+    foreach ($archivePath in $bundledMingwArchives) {
+        if (Test-Path $archivePath) {
+            return $archivePath
+        }
+    }
+
+    return $null
+}
+
+function Expand-BundledToolchainArchive {
+    param(
+        [string]$ArchivePath
+    )
+
+    $destinationRoot = Join-Path $projectRoot "third_party"
+    $isMultipart7z = $ArchivePath.ToLowerInvariant().EndsWith(".7z.001")
+    $extractor = Get-ArchiveExtractor
+    if ($extractor) {
+        Write-Host "Extracting bundled MinGW toolchain with $extractor ..."
+        & $extractor "x" $ArchivePath "-o$destinationRoot" "-y"
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to extract bundled MinGW toolchain from $ArchivePath"
+        }
+        return
+    }
+
+    if ($isMultipart7z) {
+        Write-Warning "Detected split 7-Zip archive: $ArchivePath"
+        Write-Warning "Split .7z.001 archives are most reliable with 7-Zip. Install 7-Zip if Shell extraction fails."
+    }
+
+    if ((-not $isMultipart7z) -and (Test-CommandAvailable "tar") -and $ArchivePath.ToLowerInvariant().EndsWith(".7z")) {
+        Write-Host "Extracting bundled MinGW toolchain with tar.exe ..."
+        & tar "-xf" $ArchivePath "-C" $destinationRoot
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to extract bundled MinGW toolchain from $ArchivePath with tar.exe"
+        }
+        return
+    }
+
+    if ($ArchivePath.ToLowerInvariant().EndsWith(".zip")) {
+        Write-Host "Extracting bundled MinGW toolchain with Expand-Archive ..."
+        Expand-Archive -Path $ArchivePath -DestinationPath $destinationRoot -Force
+        return
+    }
+
+    Write-Host "Extracting bundled MinGW toolchain with Windows Shell ..."
+    $shellExtracted = Expand-ArchiveWithShell -ArchivePath $ArchivePath -DestinationPath $destinationRoot
+    if (-not $shellExtracted) {
+        $extractorHint = if ($isMultipart7z) {
+            "Install 7-Zip, or ensure Windows Shell extraction supports split `.7z.001` archives."
+        } elseif ($ArchivePath.ToLowerInvariant().EndsWith(".7z")) {
+            "Install 7-Zip, ensure `tar.exe` is available for `.7z`, or enable Windows Shell extraction support."
+        } else {
+            "Install 7-Zip, use PowerShell Expand-Archive for `.zip`, or enable Windows Shell extraction support."
+        }
+        throw @"
+Bundled MinGW archive found but no supported extractor is available:
+- $ArchivePath
+
+$extractorHint
+"@
+    }
+
+    $deadline = (Get-Date).AddMinutes(3)
+    do {
+        Start-Sleep -Milliseconds 500
+        $hasBundledGcc = (Test-Path (Join-Path $bundledMingwBin "gcc.exe"))
+        $hasBundledGxx = (Test-Path (Join-Path $bundledMingwBin "g++.exe"))
+        if ($hasBundledGcc -and $hasBundledGxx) {
+            return
+        }
+    } while ((Get-Date) -lt $deadline)
+
+    throw "Bundled MinGW extraction via Windows Shell did not complete in time: $ArchivePath"
+}
+
+function Ensure-BundledToolchainAvailable {
+    $hasBundledGcc = (Test-Path (Join-Path $bundledMingwBin "gcc.exe"))
+    $hasBundledGxx = (Test-Path (Join-Path $bundledMingwBin "g++.exe"))
+    if ($hasBundledGcc -and $hasBundledGxx) {
+        return
+    }
+
+    $bundledMingwArchive = Get-BundledToolchainArchivePath
+    if (-not $bundledMingwArchive) {
+        return
+    }
+
+    if (Test-Path $bundledMingwRoot) {
+        Remove-Item -Recurse -Force $bundledMingwRoot
+    }
+
+    Expand-BundledToolchainArchive -ArchivePath $bundledMingwArchive
+
+    $hasBundledGcc = (Test-Path (Join-Path $bundledMingwBin "gcc.exe"))
+    $hasBundledGxx = (Test-Path (Join-Path $bundledMingwBin "g++.exe"))
+    if (-not ($hasBundledGcc -and $hasBundledGxx)) {
+        throw "Bundled MinGW archive was extracted, but gcc.exe or g++.exe is still missing under $bundledMingwBin"
+    }
+}
+
 function Show-ResolvedToolchain {
     $toolchainLines = @()
     foreach ($tool in @("cmake", "gcc", "g++", "mingw32-make")) {
@@ -209,6 +361,10 @@ function Assert-PackagingPrerequisites {
     }
 
     if ($NeedsArtifactBuild) {
+        Ensure-BundledToolchainAvailable
+        Initialize-BundledToolchain
+        Show-ResolvedToolchain
+
         foreach ($pythonModule in @(
             @{ Name = "pybind11"; Hint = "pybind11 (install with: pip install pybind11)" },
             @{ Name = "setuptools"; Hint = "setuptools (install with: pip install -U setuptools)" },
@@ -325,6 +481,7 @@ $env:PYTHONUTF8 = "1"
 $env:PYTHONIOENCODING = "utf-8"
 $env:OV_PYINSTALLER_MODE = $Mode
 $env:OV_PACKAGE_NAME = $PackageName
+Ensure-BundledToolchainAvailable
 Initialize-BundledToolchain
 Show-ResolvedToolchain
 Initialize-SetuptoolsScmFallback
