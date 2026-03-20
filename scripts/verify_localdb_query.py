@@ -4,21 +4,73 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass, field
 import json
 import os
 from typing import Any
 
 import httpx
 
-INFO_URI = "viking://yoyo/userinformation/default/userinformation.jsonl"
-TENDENCY_URI = "viking://yoyo/usertendencies/default/usertendencies.jsonl"
-INFO_SOURCE = "userinformation"
-TENDENCY_SOURCE = "usertendencies"
+YOYO_INFO_URI = "viking://yoyo/userinformation/default/userinformation.jsonl"
+YOYO_TENDENCY_URI = "viking://yoyo/usertendencies/default/usertendencies.jsonl"
 
-KEYWORD_NAME = "\u738b\u4e3d"
-KEYWORD_WEDNESDAY = "\u665a\u8bfe"
-KEYWORD_COFFEE = "\u65e0\u7cd6\u5496\u5561"
-KEYWORD_MUSIC = "\u6d41\u884c\u97f3\u4e50"
+
+@dataclass(frozen=True)
+class SemanticCheck:
+    source: str
+    keyword: str
+    event_types: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class QuerySourceCase:
+    source: str
+    uri: str
+
+
+@dataclass(frozen=True)
+class QueryProfile:
+    name: str
+    sources: list[QuerySourceCase]
+    semantic_checks: list[SemanticCheck] = field(default_factory=list)
+
+
+def _build_user_uri(user_space: str, source: str) -> str:
+    return f"viking://user/{user_space}/memories/localdb/{source}/events.jsonl"
+
+
+def _build_profile(profile: str, user_space: str, source_override: str | None) -> QueryProfile:
+    if profile == "yoyo":
+        return QueryProfile(
+            name="yoyo",
+            sources=[
+                QuerySourceCase(source="userinformation", uri=YOYO_INFO_URI),
+                QuerySourceCase(source="usertendencies", uri=YOYO_TENDENCY_URI),
+            ],
+            semantic_checks=[
+                SemanticCheck(
+                    source="userinformation",
+                    keyword="晚课",
+                    event_types=["yoyo_user_information"],
+                ),
+                SemanticCheck(
+                    source="usertendencies",
+                    keyword="无糖咖啡",
+                    event_types=["yoyo_user_tendency"],
+                ),
+                SemanticCheck(
+                    source="usertendencies",
+                    keyword="流行音乐",
+                    event_types=["yoyo_user_tendency"],
+                ),
+            ],
+        )
+
+    source = source_override or "user_preference"
+    return QueryProfile(
+        name="user_preference",
+        sources=[QuerySourceCase(source=source, uri=_build_user_uri(user_space, source))],
+    )
 
 
 def step(number: int, title: str) -> None:
@@ -59,6 +111,23 @@ def first_title(items: list[dict[str, Any]]) -> str:
     return str(items[0].get("text", "")).strip()
 
 
+def derive_keyword(item: dict[str, Any]) -> str:
+    attrs = item.get("attrs") if isinstance(item.get("attrs"), dict) else {}
+    candidates = [
+        str(attrs.get("title", "")).strip(),
+        str(item.get("text", "")).strip(),
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        parts = [part.strip() for part in candidate.split("|") if part.strip()]
+        for part in parts:
+            if len(part) >= 2:
+                return part[:32]
+        return candidate[:32]
+    return ""
+
+
 class QueryVerifier:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
@@ -78,220 +147,189 @@ class QueryVerifier:
             response.raise_for_status()
             return response.json()
 
-    def validate_query_api(self, expected_counts: dict[str, int]) -> dict[str, Any]:
-        sources_resp = self.get("/api/v1/localdb/sources", {"user_space": self.args.user_space})
-        sources = sources_resp.get("result") or []
-
-        info_all = (
-            self.post(
-                "/api/v1/localdb/query",
-                {
-                    "user_space": self.args.user_space,
-                    "source": INFO_SOURCE,
-                    "limit": max(expected_counts[INFO_SOURCE], 1),
-                },
-            ).get("result")
-            or {}
-        )
-        tendency_all = (
-            self.post(
-                "/api/v1/localdb/query",
-                {
-                    "user_space": self.args.user_space,
-                    "source": TENDENCY_SOURCE,
-                    "limit": max(expected_counts[TENDENCY_SOURCE], 1),
-                },
-            ).get("result")
-            or {}
-        )
-        name_hit = (
-            self.post(
-                "/api/v1/localdb/query",
-                {
-                    "user_space": self.args.user_space,
-                    "source": INFO_SOURCE,
-                    "event_types": ["yoyo_user_information"],
-                    "keyword": KEYWORD_NAME,
-                    "limit": 3,
-                    "include_evidence": False,
-                },
-            ).get("result")
-            or {}
-        )
-        wednesday_hit = (
-            self.post(
-                "/api/v1/localdb/query",
-                {
-                    "user_space": self.args.user_space,
-                    "source": INFO_SOURCE,
-                    "event_types": ["yoyo_user_information"],
-                    "keyword": KEYWORD_WEDNESDAY,
-                    "limit": 3,
-                },
-            ).get("result")
-            or {}
-        )
-        coffee_hit = (
-            self.post(
-                "/api/v1/localdb/query",
-                {
-                    "user_space": self.args.user_space,
-                    "source": TENDENCY_SOURCE,
-                    "event_types": ["yoyo_user_tendency"],
-                    "keyword": KEYWORD_COFFEE,
-                    "limit": 3,
-                },
-            ).get("result")
-            or {}
-        )
-        music_hit = (
-            self.post(
-                "/api/v1/localdb/query",
-                {
-                    "user_space": self.args.user_space,
-                    "source": TENDENCY_SOURCE,
-                    "event_types": ["yoyo_user_tendency"],
-                    "keyword": KEYWORD_MUSIC,
-                    "limit": 3,
-                },
-            ).get("result")
-            or {}
-        )
-
-        coffee_items = coffee_hit.get("items") or []
-        coffee_full = None
-        if coffee_items:
-            coffee_full = self.get(
-                "/api/v1/localdb/event",
-                {
-                    "user_space": self.args.user_space,
-                    "source": TENDENCY_SOURCE,
-                    "event_id": coffee_items[0]["id"],
-                },
-            ).get("result")
-
-        return {
-            "sources": sources,
-            "info_total": int(info_all.get("total", 0)),
-            "tendency_total": int(tendency_all.get("total", 0)),
-            "name_total": int(name_hit.get("total", 0)),
-            "name_items": name_hit.get("items") or [],
-            "name_types": [item.get("type") for item in (name_hit.get("items") or [])],
-            "name_evidence": [item.get("evidence") for item in (name_hit.get("items") or [])],
-            "wednesday_total": int(wednesday_hit.get("total", 0)),
-            "wednesday_items": wednesday_hit.get("items") or [],
-            "coffee_total": int(coffee_hit.get("total", 0)),
-            "coffee_items": coffee_items,
-            "coffee_types": [item.get("type") for item in coffee_items],
-            "music_total": int(music_hit.get("total", 0)),
-            "music_items": music_hit.get("items") or [],
-            "music_types": [item.get("type") for item in (music_hit.get("items") or [])],
-            "coffee_full_id": str((coffee_full or {}).get("id", "")),
-            "coffee_full_text": str((coffee_full or {}).get("text", "")),
+    def _query(self, source: str, **overrides: Any) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "user_space": self.args.user_space,
+            "source": source,
+            "limit": 10,
         }
+        body.update(overrides)
+        return self.post("/api/v1/localdb/query", body).get("result") or {}
 
-    def run(self) -> None:
-        step(1, "Health Check")
+    def _get_event(self, source: str, event_id: str) -> dict[str, Any] | None:
+        return self.get(
+            "/api/v1/localdb/event",
+            {
+                "user_space": self.args.user_space,
+                "source": source,
+                "event_id": event_id,
+            },
+        ).get("result")
+
+    def validate_source(self, source_case: QuerySourceCase, expected_items: list[dict[str, Any]]) -> None:
+        expected_total = len(expected_items)
+        first = expected_items[0]
+        first_id = str(first.get("id", ""))
+        first_type = str(first.get("type", ""))
+        first_text = str(first.get("text", ""))
+        keyword = derive_keyword(first)
+
+        all_result = self._query(source_case.source, limit=max(expected_total, 1))
+        id_result = self._query(source_case.source, ids=[first_id], limit=1)
+        type_result = self._query(source_case.source, event_types=[first_type], limit=3)
+        no_evidence_result = self._query(
+            source_case.source,
+            ids=[first_id],
+            include_evidence=False,
+            limit=1,
+        )
+        page_one = self._query(source_case.source, offset=0, limit=1)
+        page_two = self._query(source_case.source, offset=1, limit=1) if expected_total > 1 else {}
+        keyword_result = self._query(source_case.source, keyword=keyword, limit=3) if keyword else {}
+        full = self._get_event(source_case.source, first_id)
+
+        info(
+            f"source={source_case.source} total={all_result.get('total', 0)} "
+            f"first={first_title(all_result.get('items') or expected_items)}"
+        )
+        if keyword:
+            info(f"source={source_case.source} keyword={keyword!r} hits={keyword_result.get('total', 0)}")
+
+        assert_true(expected_total > 0, f"{source_case.uri} returned no parsed JSONL rows.")
+        assert_true(
+            int(all_result.get("total", 0)) == expected_total,
+            (
+                f"{source_case.source} total mismatch: expected {expected_total}, "
+                f"actual {all_result.get('total', 0)}"
+            ),
+        )
+        assert_true((all_result.get("items") or []), f"{source_case.source} query returned no items.")
+        assert_true(int(id_result.get("total", 0)) >= 1, f"{source_case.source} ids query returned no hits.")
+        assert_true(
+            str(((id_result.get("items") or [{}])[0]).get("id", "")) == first_id,
+            f"{source_case.source} ids query did not return the expected first id.",
+        )
+        assert_true(
+            int(type_result.get("total", 0)) >= 1,
+            f"{source_case.source} event_types query returned no hits.",
+        )
+        assert_true(
+            all(str(item.get("type", "")) == first_type for item in (type_result.get("items") or [])),
+            f"{source_case.source} event_types filter returned mixed types.",
+        )
+
+        no_evidence_items = no_evidence_result.get("items") or []
+        assert_true(no_evidence_items, f"{source_case.source} include_evidence=False returned no items.")
+        assert_true(
+            all(not item.get("evidence") for item in no_evidence_items),
+            f"{source_case.source} include_evidence=False did not strip evidence.",
+        )
+
+        page_one_items = page_one.get("items") or []
+        assert_true(page_one_items, f"{source_case.source} first page was empty.")
+        if expected_total > 1:
+            page_two_items = page_two.get("items") or []
+            assert_true(page_two_items, f"{source_case.source} second page was empty.")
+            assert_true(
+                str(page_one_items[0].get("id", "")) != str(page_two_items[0].get("id", "")),
+                f"{source_case.source} pagination did not advance to a different item.",
+            )
+
+        if keyword:
+            assert_true(
+                int(keyword_result.get("total", 0)) >= 1,
+                f"{source_case.source} keyword query returned no hits for {keyword!r}.",
+            )
+
+        assert_true(full is not None, f"{source_case.source} get_event returned no record.")
+        assert_true(str((full or {}).get("id", "")) == first_id, f"{source_case.source} get_event id mismatch.")
+        if first_text:
+            assert_true(
+                str((full or {}).get("text", "")) == first_text,
+                f"{source_case.source} get_event text mismatch.",
+            )
+
+        passed(
+            f"{source_case.source}: total={expected_total}, type={first_type}, "
+            f"keyword={keyword or '<none>'}"
+        )
+
+    def validate_semantic_checks(self, profile: QueryProfile) -> None:
+        if not profile.semantic_checks:
+            return
+
+        step(4, "Validate Profile-Specific Keywords")
+        for check in profile.semantic_checks:
+            result = self._query(
+                check.source,
+                keyword=check.keyword,
+                event_types=check.event_types,
+                limit=3,
+            )
+            items = result.get("items") or []
+            info(f"source={check.source} semantic_keyword={check.keyword!r} hits={result.get('total', 0)}")
+            assert_true(
+                int(result.get("total", 0)) >= 1,
+                f'{check.source} query_events(keyword="{check.keyword}") returned no hits.',
+            )
+            if check.event_types:
+                assert_true(
+                    all(str(item.get("type", "")) in set(check.event_types) for item in items),
+                    f"{check.source} semantic hits were not all in expected event_types.",
+                )
+            passed(f"{check.source}: semantic keyword {check.keyword!r} validated")
+
+    def run_profile(self, profile: QueryProfile) -> None:
+        step(1, f"Health Check ({profile.name})")
         health = self.get("/health")
         assert_true(health.get("status") == "ok", "Health check did not return status=ok.")
         passed(f"Health endpoint returned status=ok at {self.args.base_url}")
 
-        step(2, "Read Raw YOYO JSONL")
-        expected_counts: dict[str, int] = {}
-        for source, uri in [(INFO_SOURCE, INFO_URI), (TENDENCY_SOURCE, TENDENCY_URI)]:
-            response = self.get("/api/v1/content/read", {"uri": uri, "offset": 0, "limit": self.args.read_limit})
+        step(2, f"Read Raw JSONL ({profile.name})")
+        raw_items: dict[str, list[dict[str, Any]]] = {}
+        for source_case in profile.sources:
+            response = self.get(
+                "/api/v1/content/read",
+                {"uri": source_case.uri, "offset": 0, "limit": self.args.read_limit},
+            )
             content = str(response.get("result", ""))
             items = parse_jsonl(content)
-            assert_true(items, f"{uri} returned no parsed JSONL rows.")
-            expected_counts[source] = len(items)
-            passed(f"{source}: rows={len(items)}")
+            assert_true(items, f"{source_case.uri} returned no parsed JSONL rows.")
+            raw_items[source_case.source] = items
+            passed(f"{source_case.source}: rows={len(items)} uri={source_case.uri}")
 
-        step(3, "Validate openviking.db.query")
-        query_result = self.validate_query_api(expected_counts)
+        step(3, f"Validate localdb query APIs ({profile.name})")
+        sources_resp = self.get("/api/v1/localdb/sources", {"user_space": self.args.user_space})
+        sources = sources_resp.get("result") or []
+        info(f"sources={sources}")
+        for source_case in profile.sources:
+            assert_true(source_case.source in sources, f"list_sources did not contain {source_case.source}")
+            self.validate_source(source_case, raw_items[source_case.source])
 
-        info(f"sources={query_result['sources']}")
-        info(
-            f"totals: {INFO_SOURCE}={query_result['info_total']}, "
-            f"{TENDENCY_SOURCE}={query_result['tendency_total']}"
-        )
-        info(f"hit[{KEYWORD_NAME}]={query_result['name_total']} first={first_title(query_result['name_items'])}")
-        info(
-            f"hit[{KEYWORD_WEDNESDAY}]={query_result['wednesday_total']} "
-            f"first={first_title(query_result['wednesday_items'])}"
-        )
-        info(
-            f"hit[{KEYWORD_COFFEE}]={query_result['coffee_total']} "
-            f"first={first_title(query_result['coffee_items'])}"
-        )
-        info(
-            f"hit[{KEYWORD_MUSIC}]={query_result['music_total']} "
-            f"first={first_title(query_result['music_items'])}"
-        )
-        if query_result["coffee_full_id"]:
-            info(f"get_event id={query_result['coffee_full_id']} text={query_result['coffee_full_text']}")
+        self.validate_semantic_checks(profile)
 
-        assert_true(INFO_SOURCE in query_result["sources"], f"list_sources did not contain {INFO_SOURCE}")
-        assert_true(
-            TENDENCY_SOURCE in query_result["sources"],
-            f"list_sources did not contain {TENDENCY_SOURCE}",
-        )
-        assert_true(
-            query_result["info_total"] == expected_counts[INFO_SOURCE],
-            f"{INFO_SOURCE} total mismatch: expected {expected_counts[INFO_SOURCE]}, actual {query_result['info_total']}",
-        )
-        assert_true(
-            query_result["tendency_total"] == expected_counts[TENDENCY_SOURCE],
-            f"{TENDENCY_SOURCE} total mismatch: expected {expected_counts[TENDENCY_SOURCE]}, actual {query_result['tendency_total']}",
-        )
-        assert_true(query_result["name_total"] >= 1, f'query_events(keyword="{KEYWORD_NAME}") returned no hits.')
-        assert_true(
-            query_result["wednesday_total"] >= 1,
-            f'query_events(keyword="{KEYWORD_WEDNESDAY}") returned no hits.',
-        )
-        assert_true(
-            query_result["coffee_total"] >= 1,
-            f'query_events(keyword="{KEYWORD_COFFEE}") returned no hits.',
-        )
-        assert_true(
-            query_result["music_total"] >= 1,
-            f'query_events(keyword="{KEYWORD_MUSIC}") returned no hits.',
-        )
-        assert_true(
-            sorted(set(query_result["name_types"])) == ["yoyo_user_information"],
-            f"{KEYWORD_NAME} hits were not all yoyo_user_information.",
-        )
-        assert_true(
-            sorted(set(query_result["coffee_types"])) == ["yoyo_user_tendency"],
-            f"{KEYWORD_COFFEE} hits were not all yoyo_user_tendency.",
-        )
-        assert_true(
-            sorted(set(query_result["music_types"])) == ["yoyo_user_tendency"],
-            f"{KEYWORD_MUSIC} hits were not all yoyo_user_tendency.",
-        )
-        assert_true(
-            all(not evidence for evidence in query_result["name_evidence"]),
-            f"include_evidence=False did not strip evidence from {KEYWORD_NAME} hits.",
-        )
-        assert_true(
-            query_result["coffee_full_id"] != "",
-            f"get_event returned no record for {KEYWORD_COFFEE} hit.",
-        )
-        assert_true(
-            KEYWORD_COFFEE in query_result["coffee_full_text"],
-            f"get_event result text did not contain {KEYWORD_COFFEE}.",
-        )
-        passed(
-            "db.query validated: "
-            f"info_total={query_result['info_total']}, "
-            f"tendency_total={query_result['tendency_total']}, "
-            f"coffee_total={query_result['coffee_total']}, "
-            f"music_total={query_result['music_total']}"
-        )
+
+def _resolve_profiles(args: argparse.Namespace) -> list[QueryProfile]:
+    if args.profile == "all":
+        return [
+            _build_profile("yoyo", args.user_space, None),
+            _build_profile("user_preference", args.user_space, args.source),
+        ]
+    return [_build_profile(args.profile, args.user_space, args.source)]
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Verify OpenViking LocalDB query chain for the fixed YOYO JSONL files."
+        description=(
+            "Verify OpenViking LocalDB query chain for built-in profiles. "
+            "Use --profile yoyo, --profile user_preference, or --profile all."
+        )
+    )
+    parser.add_argument(
+        "--profile",
+        choices=["yoyo", "user_preference", "all"],
+        default="yoyo",
+        help="Built-in query verification profile.",
     )
     parser.add_argument(
         "--base-url",
@@ -309,6 +347,11 @@ def main() -> int:
         help="User space passed into localdb query APIs",
     )
     parser.add_argument(
+        "--source",
+        default=None,
+        help="Override source for user_preference profile. Default is user_preference.",
+    )
+    parser.add_argument(
         "--read-limit",
         type=int,
         default=200000,
@@ -316,7 +359,14 @@ def main() -> int:
     )
 
     args = parser.parse_args()
-    QueryVerifier(args).run()
+    if args.read_limit <= 0:
+        raise ValueError("--read-limit must be > 0")
+
+    verifier = QueryVerifier(args)
+    profiles = _resolve_profiles(args)
+    for profile in profiles:
+        verifier.run_profile(profile)
+
     return 0
 
 

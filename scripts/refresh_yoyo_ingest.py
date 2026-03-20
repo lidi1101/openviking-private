@@ -46,21 +46,21 @@ def _delete_uri(
 def _ingest(
     *,
     client: httpx.Client,
+    db_path: str,
     user_space: str,
     source: str,
     config_path: str,
     dry_run: bool,
 ) -> dict[str, Any]:
-    response = client.post(
-        "/api/v1/localdb/ingest",
-        json={
-            "user_space": user_space,
-            "source": source,
-            "config_path": config_path,
-            "dry_run": dry_run,
-            "redact": True,
-        },
-    )
+    payload = {
+        "db_path": db_path,
+        "user_space": user_space,
+        "source": source,
+        "config_path": config_path,
+        "dry_run": dry_run,
+        "redact": True,
+    }
+    response = client.post("/api/v1/localdb/ingest", json=payload)
     response.raise_for_status()
     return response.json()
 
@@ -125,7 +125,7 @@ def _print_summary(uri: str, content: str, preview_rows: int, raw_preview: bool)
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="One-click YOYO refresh: reset target JSONL files, ingest fixed SQLite, then print summaries."
+        description="One-click YOYO refresh: reset target JSONL files, ingest caller-provided SQLite, then print summaries."
     )
     parser.add_argument(
         "--base-url",
@@ -146,6 +146,11 @@ def main() -> int:
         "--source",
         default="yoyo_history",
         help="Source value for the ingest request",
+    )
+    parser.add_argument(
+        "--db-path",
+        required=True,
+        help="SQLite db_path forwarded to /api/v1/localdb/ingest",
     )
     parser.add_argument(
         "--config",
@@ -184,6 +189,12 @@ def main() -> int:
         action="store_true",
         help="Run ingest in dry-run mode after optional reset",
     )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=600.0,
+        help="HTTP timeout in seconds for reset/ingest/read requests",
+    )
 
     args = parser.parse_args()
 
@@ -195,7 +206,7 @@ def main() -> int:
     with httpx.Client(
         base_url=args.base_url,
         headers=_headers(args.api_key),
-        timeout=120.0,
+        timeout=args.timeout,
     ) as client:
         if not args.no_reset:
             _print("== Reset ==")
@@ -206,6 +217,7 @@ def main() -> int:
         _print("== Ingest ==")
         result = _ingest(
             client=client,
+            db_path=args.db_path,
             user_space=args.user_space,
             source=args.source,
             config_path=args.config,
