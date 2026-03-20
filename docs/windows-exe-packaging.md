@@ -113,6 +113,10 @@ and requires:
 
 If the active config still uses `http-client`, packaging stops immediately.
 
+If `%USERPROFILE%\.openviking\ov.conf` does not exist, the build script creates it automatically from:
+
+- `docs\ov-binding-client.example.conf`
+
 ## 3. Build Commands
 
 ### 3.1 Default build
@@ -232,6 +236,14 @@ If these paths still point to system binaries, it usually means:
 - the repository toolchain has not been extracted yet
 - extraction failed
 - or `gcc.exe/g++.exe` are still missing from the extracted directory
+
+The packaging scripts also print colored step markers:
+
+- cyan: step started
+- green: step completed successfully
+- magenta: step failed
+
+At the end of the run, both scripts print a step summary showing which steps ran and their results, even when the process stops because of an error.
 
 ### 6.2 `onefile` vs `onedir`
 

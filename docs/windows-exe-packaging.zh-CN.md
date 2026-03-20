@@ -113,6 +113,10 @@ pip install -U pybind11 setuptools wheel
 
 如果当前配置还是 `http-client`，打包脚本会直接中止。
 
+如果 `%USERPROFILE%\.openviking\ov.conf` 不存在，打包脚本会自动基于以下示例文件创建默认配置：
+
+- `docs\ov-binding-client.example.conf`
+
 ## 3. 打包命令
 
 ### 3.1 默认打包

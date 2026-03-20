@@ -19,10 +19,11 @@ if (-not (Test-Path $packagingConfigPath)) {
 $specPath = Join-Path $projectRoot $SpecFileName
 $distDir = Join-Path $projectRoot "dist"
 $buildDir = Join-Path $projectRoot "build"
+$targetBinaryName = "$PackageName.exe"
 $exePath = if ($Mode -eq "onedir") {
-    Join-Path $distDir "$PackageName\$PackageName.exe"
+    Join-Path $distDir "$PackageName\$targetBinaryName"
 } else {
-    Join-Path $distDir "$PackageName.exe"
+    Join-Path $distDir $targetBinaryName
 }
 $legacyOneDirPath = Join-Path $distDir $PackageName
 $requiredArtifacts = @(
@@ -35,6 +36,101 @@ $bundledMingwArchives = @(
     (Join-Path $projectRoot "third_party\mingw64.7z"),
     (Join-Path $projectRoot "third_party\mingw64.zip")
 )
+$stepResults = New-Object System.Collections.Generic.List[object]
+$currentStep = $null
+
+function Start-PackagingStep {
+    param(
+        [string]$Name
+    )
+
+    $script:currentStep = [pscustomobject]@{
+        Name = $Name
+        Status = "running"
+        StartedAt = Get-Date
+        Detail = $null
+    }
+    $script:stepResults.Add($script:currentStep) | Out-Null
+    Write-Host ""
+    Write-Host ("[STEP START] {0}" -f $Name) -ForegroundColor Cyan
+}
+
+function Complete-PackagingStep {
+    param(
+        [string]$Detail
+    )
+
+    if (-not $script:currentStep) {
+        return
+    }
+
+    $script:currentStep.Status = "ok"
+    $script:currentStep.Detail = $Detail
+    $duration = ((Get-Date) - $script:currentStep.StartedAt).TotalSeconds
+    if ($Detail) {
+        Write-Host ("[STEP DONE]  {0} ({1:N1}s) - {2}" -f $script:currentStep.Name, $duration, $Detail) -ForegroundColor Green
+    } else {
+        Write-Host ("[STEP DONE]  {0} ({1:N1}s)" -f $script:currentStep.Name, $duration) -ForegroundColor Green
+    }
+    $script:currentStep = $null
+}
+
+function Fail-PackagingStep {
+    param(
+        [string]$Detail
+    )
+
+    if (-not $script:currentStep) {
+        return
+    }
+
+    $script:currentStep.Status = "failed"
+    $script:currentStep.Detail = $Detail
+    $duration = ((Get-Date) - $script:currentStep.StartedAt).TotalSeconds
+    if ($Detail) {
+        Write-Host ("[STEP FAIL]  {0} ({1:N1}s) - {2}" -f $script:currentStep.Name, $duration, $Detail) -ForegroundColor Magenta
+    } else {
+        Write-Host ("[STEP FAIL]  {0} ({1:N1}s)" -f $script:currentStep.Name, $duration) -ForegroundColor Magenta
+    }
+    $script:currentStep = $null
+}
+
+function Write-PackagingSummary {
+    param(
+        [bool]$Succeeded
+    )
+
+    Write-Host ""
+    Write-Host "Packaging step summary:" -ForegroundColor DarkCyan
+    $stepIndex = 1
+    foreach ($step in $script:stepResults) {
+        $duration = ((Get-Date) - $step.StartedAt).TotalSeconds
+        $label = switch ($step.Status) {
+            "ok" { "OK" }
+            "failed" { "FAILED" }
+            default { "RUNNING" }
+        }
+        $color = switch ($step.Status) {
+            "ok" { "Green" }
+            "failed" { "Magenta" }
+            default { "Cyan" }
+        }
+        $line = "  {0}. [{1}] {2}" -f $stepIndex, $label, $step.Name
+        if ($step.Detail) {
+            $line += " - $($step.Detail)"
+        }
+        $line += " ({0:N1}s)" -f $duration
+        Write-Host $line -ForegroundColor $color
+        $stepIndex += 1
+    }
+
+    Write-Host ""
+    if ($Succeeded) {
+        Write-Host "Packaging finished successfully." -ForegroundColor Green
+    } else {
+        Write-Host "Packaging finished with errors." -ForegroundColor Magenta
+    }
+}
 
 function Get-PythonCommand {
     $candidates = @()
@@ -88,6 +184,14 @@ function Invoke-Python {
 
 function Get-MissingArtifacts {
     return $requiredArtifacts | Where-Object { -not (Test-Path $_) }
+}
+
+function Get-ArtifactNames {
+    param(
+        [string[]]$ArtifactPaths
+    )
+
+    return $ArtifactPaths | ForEach-Object { Split-Path $_ -Leaf }
 }
 
 function Build-RuntimeArtifactsLocally {
@@ -408,18 +512,32 @@ function Resolve-OvConfigPath {
     return $null
 }
 
+function Ensure-DefaultOpenVikingConfig {
+    $userConfigDir = Join-Path $env:USERPROFILE ".openviking"
+    $userConfigPath = Join-Path $userConfigDir "ov.conf"
+    $sampleConfigPath = Join-Path $projectRoot "docs\ov-binding-client.example.conf"
+
+    if (Test-Path $userConfigPath) {
+        return $userConfigPath
+    }
+
+    if (-not (Test-Path $sampleConfigPath)) {
+        throw "Sample ov.conf not found: $sampleConfigPath"
+    }
+
+    if (-not (Test-Path $userConfigDir)) {
+        New-Item -ItemType Directory -Force -Path $userConfigDir | Out-Null
+    }
+
+    Copy-Item -Force $sampleConfigPath $userConfigPath
+    Write-Host "Created default ov.conf from sample: $userConfigPath" -ForegroundColor DarkCyan
+    return $userConfigPath
+}
+
 function Assert-OpenVikingConfig {
     $configPath = Resolve-OvConfigPath
     if (-not $configPath) {
-        throw @"
-OpenViking runtime config not found.
-
-Expected one of:
-- %OPENVIKING_CONFIG_FILE%
-- $env:USERPROFILE\.openviking\ov.conf
-
-Provide a valid ov.conf before packaging so the runtime configuration is known.
-"@
+        $configPath = Ensure-DefaultOpenVikingConfig
     }
 
     Write-Host "Using ov.conf: $configPath"
@@ -471,85 +589,114 @@ Close $PackageName.exe and any process using files under this path, then retry.
     }
 }
 
-Write-Host "Project root: $projectRoot"
-Write-Host "Package name: $PackageName"
+$buildSucceeded = $false
 
-$pythonCmd = Get-PythonCommand
-Write-Host "Using Python: $pythonCmd"
-Write-Host "Build mode: $Mode"
-$env:PYTHONUTF8 = "1"
-$env:PYTHONIOENCODING = "utf-8"
-$env:OV_PYINSTALLER_MODE = $Mode
-$env:OV_PACKAGE_NAME = $PackageName
-Ensure-BundledToolchainAvailable
-Initialize-BundledToolchain
-Show-ResolvedToolchain
-Initialize-SetuptoolsScmFallback
+try {
+    Start-PackagingStep "Initialize environment for $targetBinaryName"
+    Write-Host "Project root: $projectRoot"
+    Write-Host "Package name: $PackageName"
 
-if (-not (Test-Path $specPath)) {
-    throw "Spec file not found: $specPath"
-}
+    $pythonCmd = Get-PythonCommand
+    Write-Host "Using Python: $pythonCmd"
+    Write-Host "Build mode: $Mode"
+    $env:PYTHONUTF8 = "1"
+    $env:PYTHONIOENCODING = "utf-8"
+    $env:OV_PYINSTALLER_MODE = $Mode
+    $env:OV_PACKAGE_NAME = $PackageName
+    Ensure-BundledToolchainAvailable
+    Initialize-BundledToolchain
+    Show-ResolvedToolchain
+    Initialize-SetuptoolsScmFallback
 
-if ($clean) {
-    Remove-PathIfExists -PathToRemove $buildDir
-    Remove-PathIfExists -PathToRemove $distDir
-} elseif ($Mode -eq "onefile" -and (Test-Path $legacyOneDirPath)) {
-    Write-Host "Removing legacy onedir output..."
-    Remove-PathIfExists -PathToRemove $legacyOneDirPath
-}
+    if (-not (Test-Path $specPath)) {
+        throw "Spec file not found: $specPath"
+    }
+    Complete-PackagingStep "$targetBinaryName build environment resolved"
 
-if ($rebuild) {
-    Write-Host "Forcing rebuild of runtime artifacts..."
-    foreach ($artifact in $requiredArtifacts) {
-        if (Test-Path $artifact) {
-            Remove-Item -Force $artifact
+    Start-PackagingStep "Prepare output directories for $targetBinaryName"
+    if ($clean) {
+        Remove-PathIfExists -PathToRemove $buildDir
+        Remove-PathIfExists -PathToRemove $distDir
+    } elseif ($Mode -eq "onefile" -and (Test-Path $legacyOneDirPath)) {
+        Write-Host "Removing legacy onedir output..."
+        Remove-PathIfExists -PathToRemove $legacyOneDirPath
+    }
+
+    if ($rebuild) {
+        $artifactNames = (Get-ArtifactNames -ArtifactPaths $requiredArtifacts) -join ", "
+        Write-Host "Forcing rebuild of runtime artifacts: $artifactNames"
+        foreach ($artifact in $requiredArtifacts) {
+            if (Test-Path $artifact) {
+                Remove-Item -Force $artifact
+            }
         }
     }
-}
+    Complete-PackagingStep "Output directories prepared for $targetBinaryName"
 
-Write-Host "Checking build artifacts..."
-$missingArtifacts = Get-MissingArtifacts
-if ($missingArtifacts.Count -gt 0) {
-    Assert-PackagingPrerequisites -NeedsArtifactBuild $true
+    Start-PackagingStep "Prepare runtime artifacts for $targetBinaryName"
+    Write-Host "Checking build artifacts..."
     $missingArtifacts = Get-MissingArtifacts
+    $initialMissingArtifacts = @($missingArtifacts)
+    if ($missingArtifacts.Count -gt 0) {
+        Assert-PackagingPrerequisites -NeedsArtifactBuild $true
+        $missingArtifacts = Get-MissingArtifacts
+
+        if ($missingArtifacts.Count -gt 0) {
+            Build-RuntimeArtifactsLocally
+            $missingArtifacts = Get-MissingArtifacts
+        }
+
+        if ($missingArtifacts.Count -gt 0 -and $AutoInstall) {
+            Install-EditableProject
+            $missingArtifacts = Get-MissingArtifacts
+        }
+    }
 
     if ($missingArtifacts.Count -gt 0) {
-        Build-RuntimeArtifactsLocally
-        $missingArtifacts = Get-MissingArtifacts
-    }
-
-    if ($missingArtifacts.Count -gt 0 -and $AutoInstall) {
-        Install-EditableProject
-        $missingArtifacts = Get-MissingArtifacts
-    }
-}
-
-if ($missingArtifacts.Count -gt 0) {
-    $nextStep = if (-not $AutoInstall) {
-        "Automatic pip installation is disabled unless you pass -AutoInstall."
-    } else {
-        "Local build and editable install were attempted, but the artifacts are still missing."
-    }
-    throw @"
+        $nextStep = if (-not $AutoInstall) {
+            "Automatic pip installation is disabled unless you pass -AutoInstall."
+        } else {
+            "Local build and editable install were attempted, but the artifacts are still missing."
+        }
+        throw @"
 Missing required runtime artifacts:
 $($missingArtifacts -join "`n")
 
 $nextStep
 "@
+    }
+    if ($initialMissingArtifacts.Count -gt 0) {
+        $rebuiltNames = (Get-ArtifactNames -ArtifactPaths $initialMissingArtifacts) -join ", "
+        Complete-PackagingStep "Runtime artifacts are ready for ${targetBinaryName}: $rebuiltNames"
+    } else {
+        $artifactNames = (Get-ArtifactNames -ArtifactPaths $requiredArtifacts) -join ", "
+        Complete-PackagingStep "Runtime artifacts are ready for ${targetBinaryName}: $artifactNames"
+    }
+
+    Start-PackagingStep "Validate packaging prerequisites for $targetBinaryName"
+    Assert-PackagingPrerequisites -NeedsArtifactBuild $false
+    Complete-PackagingStep "Packaging prerequisites validated"
+
+    Start-PackagingStep "Validate runtime config for $targetBinaryName"
+    Assert-OpenVikingConfig
+    Complete-PackagingStep "Runtime config validated"
+
+    Start-PackagingStep "Run PyInstaller for $targetBinaryName"
+    Write-Host "Building $targetBinaryName..."
+    Invoke-Python -PythonCmd $pythonCmd -Arguments @("-m", "PyInstaller", "--noconfirm", $specPath)
+
+    if (-not (Test-Path $exePath)) {
+        throw "Build finished but exe was not found: $exePath"
+    }
+    Complete-PackagingStep "Generated $targetBinaryName at $exePath"
+
+    $buildSucceeded = $true
+    Write-Host ""
+    Write-Host "Build complete:"
+    Write-Host "  $exePath"
+} catch {
+    Fail-PackagingStep $_.Exception.Message
+    throw
+} finally {
+    Write-PackagingSummary -Succeeded $buildSucceeded
 }
-
-Write-Host "Checking packaging prerequisites..."
-Assert-PackagingPrerequisites -NeedsArtifactBuild $false
-Write-Host "Checking runtime config..."
-Assert-OpenVikingConfig
-
-Write-Host "Building $PackageName.exe..."
-Invoke-Python -PythonCmd $pythonCmd -Arguments @("-m", "PyInstaller", "--noconfirm", $specPath)
-
-if (-not (Test-Path $exePath)) {
-    throw "Build finished but exe was not found: $exePath"
-}
-
-Write-Host ""
-Write-Host "Build complete:"
-Write-Host "  $exePath"
