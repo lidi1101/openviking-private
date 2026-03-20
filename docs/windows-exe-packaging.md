@@ -1,107 +1,89 @@
-# Windows Packaging Guide
+﻿# Windows Packaging Guide
 
 Chinese version: `docs/windows-exe-packaging.zh-CN.md`
 
-This document explains how to package the current project into `ClawMemory.exe` on Windows. It focuses on:
+This document describes the current Windows packaging layout for `ClawMemory.exe`.
 
-- packaging environment preparation
-- how to use the packaging commands
-- important caveats during the packaging process
+## 1. Packaging Layout
 
-## 1. Packaging Target
+The packaging files are now centralized under:
 
-The current packaging target is the server executable:
+- `pack\build_exe.ps1`
+- `pack\package_release.ps1`
+- `pack\packaging_config.ps1`
+- `pack\ClawMemoryPack.spec`
+- `pack\ov-binding-client.example.conf`
+
+The root directory only keeps the release entrypoints:
+
+- `pack.ps1`
+- `pack.bat`
+
+Packaging output is now written under:
+
+- `pack\dist\`
+
+## 2. Packaging Target
+
+Current assumptions:
 
 - entrypoint: `openviking_cli/server_bootstrap.py`
-- package-name config: `packaging_config.ps1`
-- current default package name: `ClawMemory`
+- package name: `ClawMemory`
+- AGFS mode: `binding-client`
+- `FileProtectDriver` is bundled into the package
 
-The current packaging route assumes:
+## 3. Environment Preparation
 
-- AGFS runs in `binding-client` mode
-- `ov.exe` is not required
-- `FileProtectDriver` is included in the package
+### 3.1 Python
 
-## 2. Environment Preparation
-
-### 2.1 Python environment
-
-Prepare an isolated Python environment and install at least:
+Install at least:
 
 ```powershell
 pip install -U pyinstaller
 pip install -U pybind11 setuptools wheel
 ```
 
-The script explicitly checks for:
+The scripts explicitly check:
 
 - `PyInstaller`
 - `pybind11`
 - `setuptools`
 - `wheel`
 
-If any of these are missing, runtime-artifact rebuilds will fail immediately.
+Python 3.12 is recommended for release builds. Python 3.14 currently produces Pydantic V1 compatibility warnings and should be treated as high risk.
 
-### 2.2 Go environment
+### 3.2 Go
 
 `libagfsbinding.dll` is built with Go, so the machine also needs:
 
 - `go`
 
-The script checks `go` whenever runtime artifacts need rebuilding.
+### 3.3 C/C++ toolchain
 
-### 2.3 C/C++ toolchain
-
-The project currently builds the native extension through CMake + MinGW, so it needs:
+The build uses CMake + MinGW and needs:
 
 - `cmake`
 - `gcc`
 - `g++`
 - `mingw32-make`
 
-You can prepare this in one of two ways:
-
-1. install `cmake/gcc/g++` system-wide
-2. keep the toolchain inside the repository
-
 The script prefers the repository toolchain and supports:
 
-- extracted directory: `third_party\mingw64\`
-- split archive entry file: `third_party\mingw64.7z.001`
+- extracted toolchain: `third_party\mingw64\`
+- split archive entry: `third_party\mingw64.7z.001`
 - archive: `third_party\mingw64.7z`
 - archive: `third_party\mingw64.zip`
 
-If `third_party\mingw64\bin` exists, the script prepends it to `PATH` automatically and prefers that toolchain.
+If only an archive exists, the build script extracts it before rebuilding runtime artifacts.
 
-If only an archive is present, the script extracts it automatically before rebuilding runtime artifacts.
+### 3.4 Runtime config
 
-### 2.4 Archive extraction support
-
-If the toolchain is stored as an archive, the script tries extractors in this order:
-
-1. `7z` / `7za` / `7zr` / `C:\Program Files\7-Zip\7z.exe`
-2. for `.7z`: Windows `tar.exe`
-3. for `.zip`: PowerShell `Expand-Archive`
-4. Windows Shell extraction support
-
-So:
-
-- split `mingw64.7z.001/.002/...` archives are recognized
-- both `mingw64.7z` and `mingw64.zip` are supported
-- a standalone 7-Zip installation is not always required
-
-For split `7z.001` archives, the most reliable path is still 7-Zip. The script recognizes the `.001` file as the archive entry file and extracts from there.
-
-### 2.5 Runtime configuration
-
-Before packaging, make sure the effective `ov.conf` is valid.
-
-The script checks, in order:
+The active config file is resolved in this order:
 
 1. `OPENVIKING_CONFIG_FILE`
 2. `%USERPROFILE%\.openviking\ov.conf`
 
-and requires:
+The build requires:
 
 ```json
 "storage": {
@@ -111,112 +93,164 @@ and requires:
 }
 ```
 
-If the active config still uses `http-client`, packaging stops immediately.
+Before validation, the build script syncs `%USERPROFILE%\.openviking\ov.conf` from:
 
-If `%USERPROFILE%\.openviking\ov.conf` does not exist, the build script creates it automatically from:
+- `pack\ov-binding-client.example.conf`
 
-- `docs\ov-binding-client.example.conf`
+If the user config directory or file does not exist, it is created automatically. If the file already exists, it is overwritten by the packaged sample.
 
-## 3. Build Commands
+## 4. Commands
 
-### 3.1 Default build
+### 4.1 Root entrypoint: `pack.ps1`
 
-Default mode is `onefile`:
+[`pack.ps1`](d:/HClawCode/LiDi/openviking-private/pack.ps1) is the unified release entrypoint at the repository root. It internally calls [`pack/package_release.ps1`](d:/HClawCode/LiDi/openviking-private/pack/package_release.ps1).
 
-```powershell
-cd d:\HClawCode\HClawMemory\ClawMemory
-.\build_exe.ps1
-```
+Available commands:
 
-Equivalent batch wrapper:
+`.\pack.ps1`  
+Purpose: generate a release package in default `onefile` mode from the existing build output. If usable output already exists, no rebuild happens first.
 
-```bat
-build_exe.bat
-```
+`.\pack.ps1 -Mode onefile`  
+Purpose: explicitly select `onefile`. Same behavior as the default command.
 
-### 3.2 Build as `onedir`
+`.\pack.ps1 -rebuild`  
+Purpose: rebuild `ClawMemory.exe` first, then generate the `onefile` release package.
 
-If you want the traditional extracted directory layout:
+`.\pack.ps1 -Mode onefile -rebuild`  
+Purpose: explicitly rebuild and package in `onefile` mode.
 
-```powershell
-.\build_exe.ps1 -Mode onedir
-```
+`.\pack.ps1 -Mode onedir`  
+Purpose: generate an `onedir` release package from the existing directory-style build output.
 
-### 3.3 Clean previous output
+`.\pack.ps1 -Mode onedir -rebuild`  
+Purpose: rebuild the `onedir` variant first, then generate the directory-style release package.
 
-Clean old `build\` and `dist\` output first:
-
-```powershell
-.\build_exe.ps1 -clean
-```
-
-### 3.4 Force runtime-artifact rebuild
-
-Delete `libagfsbinding.dll`, rebuild it, and then package:
-
-```powershell
-.\build_exe.ps1 -clean -rebuild
-```
-
-This is the best command for validating the offline packaging path.
-
-### 3.5 Allow automatic install fallback
-
-The default mode is offline-first:
-
-- it first tries `setup.py build_ext --inplace`
-- it does not automatically fall back to `pip install -e .`
-
-If you explicitly want the editable-install fallback:
-
-```powershell
-.\build_exe.ps1 -AutoInstall
-```
-
-## 4. Release Package Commands
-
-### 4.1 Package existing build output
-
-```powershell
-.\package_release.ps1
-```
-
-Equivalent batch wrapper:
+Equivalent batch entrypoint:
 
 ```bat
-package_release.bat
+pack.bat
 ```
 
-### 4.2 Rebuild first, then package
+Recommended usage:
+
+- normal onefile release: `.\pack.ps1 -rebuild`
+- more stable onedir release: `.\pack.ps1 -Mode onedir -rebuild`
+
+### 4.2 Internal build script: `pack\build_exe.ps1`
+
+Default `onefile` build only:
 
 ```powershell
-.\package_release.ps1 -rebuild
+.\pack.ps1
 ```
 
-### 4.3 Build and package `onedir`
+.\pack\build_exe.ps1
+```
+
+Build `onedir`:
 
 ```powershell
-.\package_release.ps1 -Mode onedir -rebuild
+.\pack\build_exe.ps1 -Mode onedir
 ```
 
-## 5. Output
+Clean old output:
 
-### 5.1 `build_exe.ps1` output
+```powershell
+.\pack\build_exe.ps1 -clean
+```
 
-- `onefile`: `dist\ClawMemory.exe`
-- `onedir`: `dist\ClawMemory\ClawMemory.exe`
+Force runtime-artifact rebuild and then build:
 
-### 5.2 `package_release.ps1` output
+```powershell
+.\pack\build_exe.ps1 -clean -rebuild
+```
 
-- `release\ClawMemory\`
-- `release\ClawMemory-onefile.zip`
-- `release\ClawMemory-onedir.zip`
+Allow fallback to `pip install -e .`:
+
+```powershell
+.\pack\build_exe.ps1 -AutoInstall
+```
+
+`pack.ps1` currently exposes only:
+
+- `-Mode onefile|onedir`
+- `-rebuild`
+
+It does not expose a standalone `-clean`, because the root entrypoint is intended as a release command. Fine-grained clean/rebuild control stays in `pack\build_exe.ps1`.
+
+The most important distinction in `pack\build_exe.ps1` is `-clean` vs `-rebuild`:
+
+- `-clean`: only clears packaging output
+- `-rebuild`: forces runtime-artifact rebuild
+
+Concretely:
+
+- `-clean` removes `pack\build` and `pack\dist`
+- `-clean` does not proactively remove `openviking\lib\libagfsbinding.dll`
+- if `libagfsbinding.dll` still exists, it is reused
+- `-rebuild` additionally removes `openviking\lib\libagfsbinding.dll`
+- after removal, the script rebuilds `libagfsbinding.dll` and then continues packaging
+
+Examples:
+
+```powershell
+.\pack\build_exe.ps1 -clean
+```
+
+This:
+
+- clears `pack\build`
+- clears `pack\dist`
+- rebuilds the package
+- reuses `libagfsbinding.dll` if it already exists
+
+```powershell
+.\pack\build_exe.ps1 -clean -rebuild
+```
+
+This:
+
+- clears `pack\build`
+- clears `pack\dist`
+- removes `libagfsbinding.dll`
+- rebuilds `libagfsbinding.dll`
+- rebuilds the package
+
+### 4.3 Internal release script: `pack\package_release.ps1`
+
+Package existing build output:
+
+```powershell
+.\pack\package_release.ps1
+```
+
+Rebuild first, then package:
+
+```powershell
+.\pack\package_release.ps1 -rebuild
+```
+
+Create an `onedir` release package:
+
+```powershell
+.\pack\package_release.ps1 -Mode onedir -rebuild
+```
+
+## 5. Output Paths
+
+Relevant outputs for `pack.ps1` / `pack\package_release.ps1`:
+
+- `onefile`: `pack\dist\ClawMemory.exe`
+- `onedir`: `pack\dist\ClawMemory\ClawMemory.exe`
+- `pack\dist\release\ClawMemory\`
+- `pack\dist\release\ClawMemory-onefile.zip`
+- `pack\dist\release\ClawMemory-onedir.zip`
 
 ## 6. Important Notes
 
-### 6.1 Always inspect the resolved toolchain
+### 6.1 Inspect the resolved toolchain
 
-At startup, `build_exe.ps1` prints:
+At startup, `pack\build_exe.ps1` prints:
 
 ```text
 Resolved toolchain:
@@ -226,132 +260,80 @@ Resolved toolchain:
   mingw32-make -> ...
 ```
 
-This is important. It tells you whether the build is using:
+Use this to confirm whether the build is using the bundled repository toolchain or older system binaries by accident.
 
-- the repository toolchain
-- or an older system toolchain by accident
+### 6.2 Colored step markers
 
-If these paths still point to system binaries, it usually means:
-
-- the repository toolchain has not been extracted yet
-- extraction failed
-- or `gcc.exe/g++.exe` are still missing from the extracted directory
-
-The packaging scripts also print colored step markers:
+The packaging scripts print colored steps:
 
 - cyan: step started
-- green: step completed successfully
+- green: step completed
 - magenta: step failed
 
-At the end of the run, both scripts print a step summary showing which steps ran and their results, even when the process stops because of an error.
+At the end of the run, both scripts print a numbered step summary in execution order.
 
-### 6.2 `onefile` vs `onedir`
+### 6.3 `onefile` vs `onedir`
 
 `onefile`:
 
 - produces a single executable
-- easier to distribute
-- unpacks to a temporary directory at runtime
-- more likely to be flagged by security software
+- is easier to distribute
+- extracts to a temporary directory at runtime
 
 `onedir`:
 
-- produces an extracted directory
-- starts more directly
+- produces a directory layout
 - is easier to debug
-- must be distributed as a whole directory
+- should be distributed as a whole directory
 
-If you want easier debugging or more stable delivery, prefer:
+### 6.4 `FileProtectDriver`
 
-```powershell
-.\package_release.ps1 -Mode onedir -rebuild
-```
-
-### 6.3 Do not copy only the executable in `onedir`
-
-In `onedir` mode, do not copy only:
-
-- `ClawMemory.exe`
-
-Copy the whole directory instead:
-
-- `dist\ClawMemory\`
-
-### 6.4 `FileProtectDriver` participates in startup and shutdown
-
-The current runtime automatically calls:
+The packaged runtime automatically calls:
 
 - before startup: `FileProtectDriver\FilterUpdate.cmd`
 - on shutdown: `FileProtectDriver\FilterUninstall.cmd`
 
-So make sure:
+So the packaged output must include `FileProtectDriver`, and runtime execution may require administrator privileges depending on the driver install path.
 
-- `FileProtectDriver` is present in the packaged output
-- if those scripts require administrator privileges, double-click launch may fail
+### 6.5 Offline packaging
 
-### 6.5 Offline packaging checklist
-
-For offline packaging, verify in advance:
+For offline packaging, make sure in advance:
 
 - Python dependencies are already installed
 - `go` is available
 - `PyInstaller` is available
-- `ov.conf` is valid
-- `third_party\mingw64\` or one of its archives is present
+- `openviking\_version.py` exists
+- `third_party\mingw64\` or one of its archives exists
 
 The best offline validation command is:
 
 ```powershell
-.\build_exe.ps1 -clean -rebuild
+.\pack\build_exe.ps1 -clean -rebuild
 ```
 
-### 6.6 Packaging still works without `git`
-
-The script already supports packaging on machines without `git`:
-
-- it reads the version from `openviking\_version.py`
-- it sets the fallback version for `setuptools-scm`
-
-So offline packaging machines do not need `git`, but they do need:
-
-- `openviking\_version.py`
-
-### 6.7 Terminal mojibake does not always mean the file is broken
-
-If Markdown content looks garbled in PowerShell, that is usually a terminal-encoding issue rather than file corruption. Prefer checking the file in the IDE.
-
-## 7. Recommended Commands
-
-### 7.1 Fast local build
+If you only want to clear old packaging output while keeping the existing `libagfsbinding.dll`, use:
 
 ```powershell
-.\build_exe.ps1
+.\pack\build_exe.ps1 -clean
 ```
 
-### 7.2 Full rebuild and package
+### 6.6 Split archives
 
-```powershell
-.\build_exe.ps1 -clean -rebuild
-```
+Split `7z` archives such as:
 
-### 7.3 Create an `onedir` release package
+- `third_party\mingw64.7z.001`
+- `third_party\mingw64.7z.002`
+- `third_party\mingw64.7z.003`
 
-```powershell
-.\package_release.ps1 -Mode onedir -rebuild
-```
+are supported. The `.001` file is treated as the archive entry file.
 
-### 7.4 Create a `onefile` release package
+## 7. Related Files
 
-```powershell
-.\package_release.ps1 -rebuild
-```
+- `pack.ps1`
+- `pack.bat`
+- `pack\build_exe.ps1`
+- `pack\package_release.ps1`
+- `pack\packaging_config.ps1`
+- `pack\ClawMemoryPack.spec`
+- `pack\ov-binding-client.example.conf`
 
-## 8. Related Files
-
-- `build_exe.ps1`
-- `build_exe.bat`
-- `package_release.ps1`
-- `package_release.bat`
-- `packaging_config.ps1`
-- `OpenVikingServer.spec`
-- `docs\ov-binding-client.example.conf`

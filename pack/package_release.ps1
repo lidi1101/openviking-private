@@ -7,24 +7,25 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$packagingConfigPath = Join-Path $projectRoot "packaging_config.ps1"
+$packRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$projectRoot = Split-Path -Parent $packRoot
+$packagingConfigPath = Join-Path $packRoot "packaging_config.ps1"
 if (-not (Test-Path $packagingConfigPath)) {
     throw "Packaging config not found: $packagingConfigPath"
 }
 . $packagingConfigPath
 
 $distExe = if ($Mode -eq "onedir") {
-    Join-Path $projectRoot "dist\$PackageName\$PackageName.exe"
+    Join-Path $packRoot "dist\$PackageName\$PackageName.exe"
 } else {
-    Join-Path $projectRoot "dist\$PackageName.exe"
+    Join-Path $packRoot "dist\$PackageName.exe"
 }
 $targetBinaryName = "$PackageName.exe"
-$releaseRoot = Join-Path $projectRoot "release"
+$releaseRoot = Join-Path $packRoot "dist\release"
 $releaseAppDir = Join-Path $releaseRoot $PackageName
 $releaseExe = Join-Path $releaseAppDir "$PackageName.exe"
 $zipPath = Join-Path $releaseRoot "$PackageName-$Mode.zip"
-$buildScript = Join-Path $projectRoot "build_exe.ps1"
+$buildScript = Join-Path $packRoot "build_exe.ps1"
 $stepResults = New-Object System.Collections.Generic.List[object]
 $currentStep = $null
 
@@ -37,6 +38,7 @@ function Start-PackagingStep {
         Name = $Name
         Status = "running"
         StartedAt = Get-Date
+        EndedAt = $null
         Detail = $null
     }
     $script:stepResults.Add($script:currentStep) | Out-Null
@@ -54,8 +56,9 @@ function Complete-PackagingStep {
     }
 
     $script:currentStep.Status = "ok"
+    $script:currentStep.EndedAt = Get-Date
     $script:currentStep.Detail = $Detail
-    $duration = ((Get-Date) - $script:currentStep.StartedAt).TotalSeconds
+    $duration = ($script:currentStep.EndedAt - $script:currentStep.StartedAt).TotalSeconds
     if ($Detail) {
         Write-Host ("[STEP DONE]  {0} ({1:N1}s) - {2}" -f $script:currentStep.Name, $duration, $Detail) -ForegroundColor Green
     } else {
@@ -74,8 +77,9 @@ function Fail-PackagingStep {
     }
 
     $script:currentStep.Status = "failed"
+    $script:currentStep.EndedAt = Get-Date
     $script:currentStep.Detail = $Detail
-    $duration = ((Get-Date) - $script:currentStep.StartedAt).TotalSeconds
+    $duration = ($script:currentStep.EndedAt - $script:currentStep.StartedAt).TotalSeconds
     if ($Detail) {
         Write-Host ("[STEP FAIL]  {0} ({1:N1}s) - {2}" -f $script:currentStep.Name, $duration, $Detail) -ForegroundColor Magenta
     } else {
@@ -93,7 +97,8 @@ function Write-PackagingSummary {
     Write-Host "Packaging step summary:" -ForegroundColor DarkCyan
     $stepIndex = 1
     foreach ($step in $script:stepResults) {
-        $duration = ((Get-Date) - $step.StartedAt).TotalSeconds
+        $endedAt = if ($step.EndedAt) { $step.EndedAt } else { Get-Date }
+        $duration = ($endedAt - $step.StartedAt).TotalSeconds
         $label = switch ($step.Status) {
             "ok" { "OK" }
             "failed" { "FAILED" }

@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [switch]$clean,
     [switch]$rebuild,
@@ -9,16 +9,17 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$packagingConfigPath = Join-Path $projectRoot "packaging_config.ps1"
+$packRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$projectRoot = Split-Path -Parent $packRoot
+$packagingConfigPath = Join-Path $packRoot "packaging_config.ps1"
 if (-not (Test-Path $packagingConfigPath)) {
     throw "Packaging config not found: $packagingConfigPath"
 }
 . $packagingConfigPath
 
-$specPath = Join-Path $projectRoot $SpecFileName
-$distDir = Join-Path $projectRoot "dist"
-$buildDir = Join-Path $projectRoot "build"
+$specPath = Join-Path $packRoot $SpecFileName
+$distDir = Join-Path $packRoot "dist"
+$buildDir = Join-Path $packRoot "build"
 $targetBinaryName = "$PackageName.exe"
 $exePath = if ($Mode -eq "onedir") {
     Join-Path $distDir "$PackageName\$targetBinaryName"
@@ -48,6 +49,7 @@ function Start-PackagingStep {
         Name = $Name
         Status = "running"
         StartedAt = Get-Date
+        EndedAt = $null
         Detail = $null
     }
     $script:stepResults.Add($script:currentStep) | Out-Null
@@ -65,8 +67,9 @@ function Complete-PackagingStep {
     }
 
     $script:currentStep.Status = "ok"
+    $script:currentStep.EndedAt = Get-Date
     $script:currentStep.Detail = $Detail
-    $duration = ((Get-Date) - $script:currentStep.StartedAt).TotalSeconds
+    $duration = ($script:currentStep.EndedAt - $script:currentStep.StartedAt).TotalSeconds
     if ($Detail) {
         Write-Host ("[STEP DONE]  {0} ({1:N1}s) - {2}" -f $script:currentStep.Name, $duration, $Detail) -ForegroundColor Green
     } else {
@@ -85,8 +88,9 @@ function Fail-PackagingStep {
     }
 
     $script:currentStep.Status = "failed"
+    $script:currentStep.EndedAt = Get-Date
     $script:currentStep.Detail = $Detail
-    $duration = ((Get-Date) - $script:currentStep.StartedAt).TotalSeconds
+    $duration = ($script:currentStep.EndedAt - $script:currentStep.StartedAt).TotalSeconds
     if ($Detail) {
         Write-Host ("[STEP FAIL]  {0} ({1:N1}s) - {2}" -f $script:currentStep.Name, $duration, $Detail) -ForegroundColor Magenta
     } else {
@@ -104,7 +108,8 @@ function Write-PackagingSummary {
     Write-Host "Packaging step summary:" -ForegroundColor DarkCyan
     $stepIndex = 1
     foreach ($step in $script:stepResults) {
-        $duration = ((Get-Date) - $step.StartedAt).TotalSeconds
+        $endedAt = if ($step.EndedAt) { $step.EndedAt } else { Get-Date }
+        $duration = ($endedAt - $step.StartedAt).TotalSeconds
         $label = switch ($step.Status) {
             "ok" { "OK" }
             "failed" { "FAILED" }
@@ -180,6 +185,18 @@ function Invoke-Python {
     if ($LASTEXITCODE -ne 0) {
         throw "Python command failed with exit code ${LASTEXITCODE}: $PythonCmd $($Arguments -join ' ')"
     }
+}
+
+function Get-PythonVersionString {
+    param(
+        [string]$PythonCmd
+    )
+
+    if ($PythonCmd -like "* *") {
+        return (& $env:ComSpec /c $PythonCmd "-c" "import platform; print(platform.python_version())")
+    }
+
+    return (& $PythonCmd "-c" "import platform; print(platform.python_version())")
 }
 
 function Get-MissingArtifacts {
@@ -281,24 +298,16 @@ function Expand-ArchiveWithShell {
         [string]$DestinationPath
     )
 
-    try {
-        $shell = New-Object -ComObject Shell.Application
-        $archiveNamespace = $shell.NameSpace($ArchivePath)
-        $destinationNamespace = $shell.NameSpace($DestinationPath)
-    } catch {
-        return $false
-    }
+    $shell = New-Object -ComObject Shell.Application
+    $archiveNamespace = $shell.NameSpace($ArchivePath)
+    $destinationNamespace = $shell.NameSpace($DestinationPath)
 
     if (-not $archiveNamespace -or -not $destinationNamespace) {
         return $false
     }
 
-    try {
-        $destinationNamespace.CopyHere($archiveNamespace.Items(), 0x10)
-        return $true
-    } catch {
-        return $false
-    }
+    $destinationNamespace.CopyHere($archiveNamespace.Items(), 0x10)
+    return $true
 }
 
 function Get-BundledToolchainArchivePath {
@@ -310,7 +319,6 @@ function Get-BundledToolchainArchivePath {
 
     return $null
 }
-
 function Join-SplitArchiveParts {
     param(
         [string]$FirstPartPath
@@ -342,6 +350,7 @@ function Join-SplitArchiveParts {
 
     return $mergedArchivePath
 }
+
 
 function Expand-BundledToolchainArchive {
     param(
@@ -569,14 +578,10 @@ function Resolve-OvConfigPath {
     return $null
 }
 
-function Ensure-DefaultOpenVikingConfig {
+function Sync-OpenVikingConfigFromSample {
     $userConfigDir = Join-Path $env:USERPROFILE ".openviking"
     $userConfigPath = Join-Path $userConfigDir "ov.conf"
-    $sampleConfigPath = Join-Path $projectRoot "docs\ov-binding-client.example.conf"
-
-    if (Test-Path $userConfigPath) {
-        return $userConfigPath
-    }
+    $sampleConfigPath = Join-Path $packRoot "ov-binding-client.example.conf"
 
     if (-not (Test-Path $sampleConfigPath)) {
         throw "Sample ov.conf not found: $sampleConfigPath"
@@ -587,14 +592,16 @@ function Ensure-DefaultOpenVikingConfig {
     }
 
     Copy-Item -Force $sampleConfigPath $userConfigPath
-    Write-Host "Created default ov.conf from sample: $userConfigPath" -ForegroundColor DarkCyan
+    Write-Host "Synced ov.conf from sample: $userConfigPath" -ForegroundColor DarkCyan
     return $userConfigPath
 }
 
 function Assert-OpenVikingConfig {
     $configPath = Resolve-OvConfigPath
     if (-not $configPath) {
-        $configPath = Ensure-DefaultOpenVikingConfig
+        $configPath = Sync-OpenVikingConfigFromSample
+    } elseif ($configPath -eq (Join-Path $env:USERPROFILE ".openviking\ov.conf")) {
+        $configPath = Sync-OpenVikingConfigFromSample
     }
 
     Write-Host "Using ov.conf: $configPath"
@@ -651,11 +658,17 @@ $buildSucceeded = $false
 try {
     Start-PackagingStep "Initialize environment for $targetBinaryName"
     Write-Host "Project root: $projectRoot"
+    Write-Host "Pack root: $packRoot"
     Write-Host "Package name: $PackageName"
 
     $pythonCmd = Get-PythonCommand
     Write-Host "Using Python: $pythonCmd"
+    $pythonVersion = Get-PythonVersionString -PythonCmd $pythonCmd
+    Write-Host "Python version: $pythonVersion"
     Write-Host "Build mode: $Mode"
+    if ([version]$pythonVersion -ge [version]"3.14.0") {
+        Write-Warning "Python 3.14+ is currently high risk for this packaging route because some dependencies still rely on Pydantic V1 compatibility paths. Prefer Python 3.12 for release builds."
+    }
     $env:PYTHONUTF8 = "1"
     $env:PYTHONIOENCODING = "utf-8"
     $env:OV_PYINSTALLER_MODE = $Mode
@@ -740,7 +753,13 @@ $nextStep
 
     Start-PackagingStep "Run PyInstaller for $targetBinaryName"
     Write-Host "Building $targetBinaryName..."
-    Invoke-Python -PythonCmd $pythonCmd -Arguments @("-m", "PyInstaller", "--noconfirm", $specPath)
+    Invoke-Python -PythonCmd $pythonCmd -Arguments @(
+        "-m", "PyInstaller",
+        "--noconfirm",
+        "--distpath", $distDir,
+        "--workpath", $buildDir,
+        $specPath
+    )
 
     if (-not (Test-Path $exePath)) {
         throw "Build finished but exe was not found: $exePath"
@@ -757,3 +776,4 @@ $nextStep
 } finally {
     Write-PackagingSummary -Succeeded $buildSucceeded
 }
+
