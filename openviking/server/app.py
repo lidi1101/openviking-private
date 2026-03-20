@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """FastAPI application for OpenViking HTTP Server."""
 
+import asyncio
 import time
 from contextlib import asynccontextmanager
 from typing import Callable, Optional
@@ -30,6 +31,7 @@ from openviking.server.routers import (
     system_router,
     tasks_router,
 )
+from openviking.server.startup_e2e import run_startup_probe, startup_probe_enabled
 from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
 from openviking_cli.exceptions import OpenVikingError
@@ -60,6 +62,7 @@ def create_app(
     async def lifespan(app: FastAPI):
         """Application lifespan handler."""
         nonlocal service
+        startup_probe_task: Optional[asyncio.Task] = None
         if service is None:
             service = OpenVikingService()
             await service.initialize()
@@ -90,9 +93,25 @@ def create_app(
         task_tracker = get_task_tracker()
         task_tracker.start_cleanup_loop()
 
+        if startup_probe_enabled():
+            if config.workers > 1:
+                logger.info(
+                    "Startup ingest/query probe skipped because server.workers=%s",
+                    config.workers,
+                )
+            else:
+                startup_probe_task = asyncio.create_task(run_startup_probe(config))
+                app.state.startup_probe_task = startup_probe_task
+
         yield
 
         # Cleanup
+        if startup_probe_task is not None:
+            startup_probe_task.cancel()
+            try:
+                await startup_probe_task
+            except asyncio.CancelledError:
+                pass
         task_tracker.stop_cleanup_loop()
         if service:
             await service.close()

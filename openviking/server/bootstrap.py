@@ -113,6 +113,10 @@ def main():
     if args.config is not None:
         os.environ["OPENVIKING_CONFIG_FILE"] = args.config
 
+    # Enable the delayed ingest/query startup probe by default for real server boots.
+    # It can still be disabled explicitly with OPENVIKING_STARTUP_E2E_ENABLED=0.
+    os.environ.setdefault("OPENVIKING_STARTUP_E2E_ENABLED", "1")
+
     # Load server config from ov.conf
     config = load_server_config(args.config)
 
