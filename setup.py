@@ -15,6 +15,10 @@ ENGINE_SOURCE_DIR = "src/"
 PROJECT_ROOT = Path(__file__).resolve().parent
 BUNDLED_MINGW_ROOT = PROJECT_ROOT / "third_party" / "mingw64"
 BUNDLED_MINGW_BIN = BUNDLED_MINGW_ROOT / "bin"
+WINDOWS_FALLBACK_MINGW_ROOTS = (
+    Path(r"C:\msys64\ucrt64"),
+    Path(r"C:\msys64\mingw64"),
+)
 
 
 def _resolve_bundled_tool(tool_name):
@@ -24,10 +28,73 @@ def _resolve_bundled_tool(tool_name):
     return None
 
 
+def _resolve_windows_fallback_tool(tool_name):
+    if sys.platform != "win32":
+        return None
+
+    for root in WINDOWS_FALLBACK_MINGW_ROOTS:
+        candidate = root / "bin" / tool_name
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
+def _parse_gnu_major_version(tool_path):
+    try:
+        result = subprocess.run(
+            [tool_path, "--version"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except Exception:
+        return None
+
+    version_output = (result.stdout or result.stderr).splitlines()
+    if not version_output:
+        return None
+
+    for token in version_output[0].replace("(", " ").replace(")", " ").split():
+        parts = token.split(".")
+        if parts and parts[0].isdigit():
+            return int(parts[0])
+    return None
+
+
+def _prepend_tool_dirs_to_path(path_value, tool_paths):
+    seen = set()
+    parts = []
+
+    for tool_path in tool_paths:
+        if not tool_path:
+            continue
+        tool_dir = str(Path(tool_path).resolve().parent)
+        norm_tool_dir = os.path.normcase(tool_dir)
+        if norm_tool_dir in seen:
+            continue
+        seen.add(norm_tool_dir)
+        parts.append(tool_dir)
+
+    for part in path_value.split(os.pathsep):
+        if not part:
+            continue
+        norm_part = os.path.normcase(part)
+        if norm_part in seen:
+            continue
+        seen.add(norm_part)
+        parts.append(part)
+
+    return os.pathsep.join(parts)
+
+
 def _resolve_tool(env_name, tool_name):
     return (
         os.environ.get(env_name)
         or _resolve_bundled_tool(f"{tool_name}.exe" if sys.platform == "win32" else tool_name)
+        or _resolve_windows_fallback_tool(
+            f"{tool_name}.exe" if sys.platform == "win32" else tool_name
+        )
         or shutil.which(tool_name)
         or tool_name
     )
@@ -36,6 +103,33 @@ def _resolve_tool(env_name, tool_name):
 CMAKE_PATH = _resolve_tool("CMAKE", "cmake")
 C_COMPILER_PATH = _resolve_tool("CC", "gcc")
 CXX_COMPILER_PATH = _resolve_tool("CXX", "g++")
+
+if sys.platform == "win32" and not os.environ.get("CC") and not os.environ.get("CXX"):
+    detected_gxx_major = _parse_gnu_major_version(CXX_COMPILER_PATH)
+    fallback_gxx = _resolve_windows_fallback_tool("g++.exe")
+    fallback_gcc = _resolve_windows_fallback_tool("gcc.exe")
+    fallback_gxx_major = _parse_gnu_major_version(fallback_gxx) if fallback_gxx else None
+
+    # Prefer a modern MSYS2 toolchain over the legacy conda-provided GCC 5.x.
+    if (
+        fallback_gxx
+        and fallback_gcc
+        and fallback_gxx_major is not None
+        and fallback_gxx_major >= 11
+        and (detected_gxx_major is None or detected_gxx_major < 11)
+    ):
+        print(
+            "[Info] Switching Windows C/C++ toolchain to "
+            f"{fallback_gxx} (detected GCC {fallback_gxx_major})"
+        )
+        C_COMPILER_PATH = fallback_gcc
+        CXX_COMPILER_PATH = fallback_gxx
+
+if sys.platform == "win32":
+    os.environ["PATH"] = _prepend_tool_dirs_to_path(
+        os.environ.get("PATH", ""),
+        (CMAKE_PATH, C_COMPILER_PATH, CXX_COMPILER_PATH),
+    )
 
 
 def _console_safe(text):
