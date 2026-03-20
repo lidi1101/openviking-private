@@ -2,7 +2,12 @@
 import os
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
+from PyInstaller.utils.hooks import (
+    collect_data_files,
+    collect_dynamic_libs,
+    collect_submodules,
+    copy_metadata,
+)
 
 
 PACK_ROOT = Path(SPECPATH).resolve()
@@ -24,10 +29,23 @@ hiddenimports = []
 hiddenimports += collect_submodules("openviking")
 hiddenimports += collect_submodules("openviking_cli")
 hiddenimports += collect_submodules("litellm", on_error="ignore")
+hiddenimports += collect_submodules("fastapi", on_error="ignore")
+hiddenimports += collect_submodules("starlette", on_error="ignore")
+hiddenimports += collect_submodules("uvicorn", on_error="ignore")
+hiddenimports += collect_submodules("anyio", on_error="ignore")
+hiddenimports += collect_submodules("multipart", on_error="ignore")
 
 datas += collect_data_files("openviking", include_py_files=False)
 datas += collect_data_files("openviking_cli", include_py_files=False)
 datas += collect_data_files("litellm", include_py_files=False)
+datas += collect_data_files("fastapi", include_py_files=False)
+datas += collect_data_files("starlette", include_py_files=False)
+datas += collect_data_files("uvicorn", include_py_files=False)
+datas += copy_metadata("fastapi")
+datas += copy_metadata("starlette")
+datas += copy_metadata("uvicorn")
+datas += copy_metadata("pydantic")
+datas += copy_metadata("python_multipart", recursive=True)
 
 internal_embed_source = PROJECT_ROOT / "emb_requests.py"
 if internal_embed_source.exists():

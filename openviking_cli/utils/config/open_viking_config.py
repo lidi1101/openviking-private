@@ -237,7 +237,9 @@ class OpenVikingConfigSingleton:
             if not config_path.exists():
                 raise FileNotFoundError(f"Config file does not exist: {config_file}")
 
-            with open(config_path, "r", encoding="utf-8") as f:
+            # Accept UTF-8 with or without BOM so packaged/sample configs copied
+            # from Windows editors do not fail during startup.
+            with open(config_path, "r", encoding="utf-8-sig") as f:
                 config_data = json.load(f)
 
             return OpenVikingConfig.from_dict(config_data)

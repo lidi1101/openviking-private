@@ -225,6 +225,38 @@ function Install-EditableProject {
     Invoke-Python -PythonCmd $pythonCmd -Arguments @("-m", "pip", "install", "-e", ".")
 }
 
+function Assert-RuntimePythonDependencies {
+    $missing = @()
+
+    foreach ($pythonModule in @(
+        @{ Name = "fastapi"; Hint = "fastapi (install with: pip install fastapi)" },
+        @{ Name = "starlette"; Hint = "starlette (install with: pip install starlette)" },
+        @{ Name = "uvicorn"; Hint = "uvicorn (install with: pip install uvicorn)" },
+        @{ Name = "multipart"; Hint = "python-multipart (install with: pip install python-multipart)" },
+        @{ Name = "httpx"; Hint = "httpx (install with: pip install httpx)" },
+        @{ Name = "pydantic"; Hint = "pydantic (install with: pip install pydantic)" }
+    )) {
+        try {
+            Invoke-Python -PythonCmd $pythonCmd -Arguments @("-c", "import $($pythonModule.Name)")
+        } catch {
+            $missing += $pythonModule.Hint
+        }
+    }
+
+    if ($missing.Count -gt 0) {
+        $items = ($missing | ForEach-Object { "- $_" }) -join "`n"
+        throw @"
+Missing required runtime Python dependencies for packaging:
+$items
+
+The executable can be built with missing imports, but it will fail at startup.
+Install the missing packages into the same Python environment used for packaging,
+or run:
+  pip install -e .
+"@
+    }
+}
+
 function Test-CommandAvailable {
     param(
         [string]$CommandName
@@ -746,6 +778,10 @@ $nextStep
     Start-PackagingStep "Validate packaging prerequisites for $targetBinaryName"
     Assert-PackagingPrerequisites -NeedsArtifactBuild $false
     Complete-PackagingStep "Packaging prerequisites validated"
+
+    Start-PackagingStep "Validate runtime Python dependencies for $targetBinaryName"
+    Assert-RuntimePythonDependencies
+    Complete-PackagingStep "Runtime Python dependencies validated"
 
     Start-PackagingStep "Validate runtime config for $targetBinaryName"
     Assert-OpenVikingConfig
