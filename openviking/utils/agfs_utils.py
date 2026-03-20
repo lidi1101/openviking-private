@@ -13,6 +13,18 @@ from openviking_cli.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _workspace_permission_error(local_dir: str) -> PermissionError:
+    """Build a clear configuration error for an unwritable local AGFS directory."""
+    resolved_dir = Path(local_dir).resolve()
+    workspace_dir = resolved_dir.parent if resolved_dir.name.lower() == "viking" else resolved_dir
+    return PermissionError(
+        f"OpenViking cannot create the local AGFS directory '{resolved_dir}'. "
+        f"The configured storage.workspace '{workspace_dir}' is not writable. "
+        "Update 'storage.workspace' in ov.conf to a user-writable path, "
+        "for example '~/.openviking/workspace' or './data'."
+    )
+
+
 def create_agfs_client(agfs_config: Any) -> Any:
     """
     Create an AGFS client based on the provided configuration.
@@ -97,7 +109,11 @@ def mount_agfs_backend(agfs: Any, agfs_config: Any) -> None:
         # Ensure localfs directory exists before mounting
         if plugin_name == "localfs" and "local_dir" in plugin_config.get("config", {}):
             local_dir = plugin_config["config"]["local_dir"]
-            os.makedirs(local_dir, exist_ok=True)
+            try:
+                os.makedirs(local_dir, exist_ok=True)
+            except PermissionError as exc:
+                logger.error(f"[AGFSUtils] Local directory is not writable: {local_dir}")
+                raise _workspace_permission_error(local_dir) from exc
             logger.debug(f"[AGFSUtils] Ensured local directory exists: {local_dir}")
 
         try:

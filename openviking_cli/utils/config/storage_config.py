@@ -1,5 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
+import os
 from pathlib import Path
 from typing import Any, Dict
 
@@ -11,6 +12,12 @@ from .agfs_config import AGFSConfig
 from .vectordb_config import VectorDBBackendConfig
 
 logger = get_logger(__name__)
+
+
+def resolve_workspace_path_value(workspace: str) -> Path:
+    """Resolve a configured workspace path to an absolute user-local path."""
+    expanded = os.path.expandvars(workspace)
+    return Path(expanded).expanduser().resolve()
 
 
 class StorageConfig(BaseModel):
@@ -51,8 +58,15 @@ class StorageConfig(BaseModel):
             )
 
         # Update paths to use workspace
-        workspace_path = Path(self.workspace).resolve()
-        workspace_path.mkdir(parents=True, exist_ok=True)
+        workspace_path = resolve_workspace_path_value(self.workspace)
+        try:
+            workspace_path.mkdir(parents=True, exist_ok=True)
+        except PermissionError as exc:
+            raise PermissionError(
+                f"OpenViking cannot write to storage.workspace '{workspace_path}'. "
+                "Update 'storage.workspace' in ov.conf to a user-writable path, "
+                "for example '~/.openviking/workspace' or './data'."
+            ) from exc
         self.workspace = str(workspace_path)
         self.agfs.path = self.workspace
         self.vectordb.path = self.workspace
@@ -65,7 +79,7 @@ class StorageConfig(BaseModel):
         Returns:
             Path to {workspace}/temp/upload directory
         """
-        workspace_path = Path(self.workspace).resolve()
+        workspace_path = resolve_workspace_path_value(self.workspace)
         upload_temp_dir = workspace_path / "temp" / "upload"
         upload_temp_dir.mkdir(parents=True, exist_ok=True)
         return upload_temp_dir

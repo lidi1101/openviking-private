@@ -29,7 +29,7 @@ from .parser_config import (
     VideoConfig,
 )
 from .rerank_config import RerankConfig
-from .storage_config import StorageConfig
+from .storage_config import StorageConfig, resolve_workspace_path_value
 from .vlm_config import VLMConfig
 
 
@@ -343,8 +343,14 @@ def initialize_openviking_config(
         config.storage.vectordb.backend = config.storage.vectordb.backend or "local"
         # Resolve and update workspace + dependent paths (model_validator won't
         # re-run on attribute assignment, so sync agfs.path / vectordb.path here).
-        workspace_path = Path(path).resolve()
-        workspace_path.mkdir(parents=True, exist_ok=True)
+        workspace_path = resolve_workspace_path_value(path)
+        try:
+            workspace_path.mkdir(parents=True, exist_ok=True)
+        except PermissionError as exc:
+            raise PermissionError(
+                f"OpenViking cannot write to storage.workspace '{workspace_path}'. "
+                "Update the configured workspace to a user-writable path."
+            ) from exc
         resolved = str(workspace_path)
         config.storage.workspace = resolved
         config.storage.agfs.path = resolved
