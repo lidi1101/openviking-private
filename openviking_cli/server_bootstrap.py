@@ -12,7 +12,52 @@ is ever imported.
 """
 
 import os
+import subprocess
 import sys
+from pathlib import Path
+
+
+def _resolve_driver_dir() -> Path | None:
+    if getattr(sys, "frozen", False):
+        bundle_root = Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
+        driver_dir = bundle_root / "FileProtectDriver"
+        return driver_dir if driver_dir.exists() else None
+
+    project_root = Path(__file__).resolve().parents[1]
+    for candidate in (project_root / "FileProtectDriver", project_root / "protector"):
+        if candidate.exists():
+            return candidate
+
+    return None
+
+
+def _run_driver_script(script_name: str, *, required: bool) -> None:
+    driver_dir = _resolve_driver_dir()
+    if driver_dir is None:
+        message = "FileProtectDriver directory not found."
+        if required:
+            raise RuntimeError(message)
+        print(f"[WARN] {message}", file=sys.stderr)
+        return
+
+    script_path = driver_dir / script_name
+    if not script_path.exists():
+        message = f"Driver script not found: {script_path}"
+        if required:
+            raise RuntimeError(message)
+        print(f"[WARN] {message}", file=sys.stderr)
+        return
+
+    result = subprocess.run(
+        ["cmd.exe", "/c", str(script_path)],
+        cwd=str(driver_dir),
+        check=False,
+    )
+    if result.returncode != 0:
+        message = f"{script_name} failed with exit code {result.returncode}"
+        if required:
+            raise RuntimeError(message)
+        print(f"[WARN] {message}", file=sys.stderr)
 
 
 def main():
@@ -26,9 +71,14 @@ def main():
             os.environ["OPENVIKING_CONFIG_FILE"] = arg.split("=", 1)[1]
             break
 
-    from openviking.server.bootstrap import main as _real_main
+    _run_driver_script("FilterUpdate.cmd", required=True)
 
-    _real_main()
+    try:
+        from openviking.server.bootstrap import main as _real_main
+
+        _real_main()
+    finally:
+        _run_driver_script("FilterUninstall.cmd", required=False)
 
 
 if __name__ == "__main__":

@@ -1,22 +1,33 @@
 # Windows EXE Packaging
 
-中文版本：`docs/windows-exe-packaging.zh-CN.md`
+Chinese version: `docs/windows-exe-packaging.zh-CN.md`
 
 This project can be packaged as a double-clickable Windows executable with PyInstaller.
 
-The recommended target is the server entrypoint:
+The recommended entrypoint is:
 
 - `openviking_cli/server_bootstrap.py`
 
-The build supports both `onefile` and `onedir`, and defaults to `onefile`. It assumes AGFS runs in `binding-client` mode.
+The package name is centralized in:
+
+- `packaging_config.ps1`
+
+The current package name is `ClawMemory`. To rename the packaged app later, change that file only.
+
+The build supports both `onefile` and `onedir`, and defaults to `onefile`. The current route assumes AGFS runs in `binding-client` mode.
 
 ## Prerequisites
 
-Use a Python environment with build dependencies available.
+Prepare a Python environment with the required packaging dependencies installed.
 
-The packaging script will automatically try to build the required runtime artifact with `OV_DISABLE_OV_CLI=1` if it is missing.
-It now performs explicit prerequisite checks for Python packaging, and when artifact rebuild is needed it also checks for `go`, `cmake`, `gcc`, and `g++`.
-It also validates the active `ov.conf` and requires `storage.agfs.mode = "binding-client"` for this packaging route.
+The build script explicitly checks:
+
+- `PyInstaller`
+- when runtime artifacts need rebuilding: `pybind11`, `setuptools`, `wheel`
+- system tools needed for rebuilding artifacts: `go`
+- C/C++ toolchain for rebuilding artifacts: either install `cmake`, `gcc`, and `g++`, or keep the bundled `third_party\mingw64` directory in the repository
+- the active `ov.conf`
+- `storage.agfs.mode == "binding-client"`
 
 Install PyInstaller first:
 
@@ -27,7 +38,7 @@ pip install -U pyinstaller
 
 ## Build
 
-Run:
+Default build:
 
 ```powershell
 cd d:\HClawCode\HClawMemory\ClawMemory
@@ -40,7 +51,7 @@ Equivalent batch wrapper:
 build_exe.bat
 ```
 
-Build as `onedir` instead of the default `onefile`:
+Build as `onedir`:
 
 ```powershell
 .\build_exe.ps1 -Mode onedir
@@ -49,21 +60,31 @@ Build as `onedir` instead of the default `onefile`:
 Clean previous build output first:
 
 ```powershell
-.\build_exe.ps1 -Clean
+.\build_exe.ps1 -clean
 ```
 
-Force rebuild the server runtime artifacts and then package:
+Force rebuild runtime artifacts before packaging:
 
 ```powershell
-.\build_exe.ps1 -Clean -RebuildArtifacts
+.\build_exe.ps1 -clean -rebuild
 ```
+
+Offline-safe mode is the default: the script first tries local artifact build via `setup.py build_ext --inplace` and does not fall back to `pip install -e .` unless you explicitly allow it.
+
+Allow the editable-install fallback:
+
+```powershell
+.\build_exe.ps1 -AutoInstall
+```
+
+If `third_party\mingw64\bin` exists, the build script prepends it to `PATH` automatically and `setup.py` prefers that bundled MinGW toolchain. This lets you avoid installing `cmake`, `gcc`, and `g++` system-wide. If you use bundled `cmake.exe`, keep `third_party\mingw64\share\cmake-*` intact.
 
 ## Output
 
 The executable is generated at:
 
-- `dist\OpenVikingServer.exe` in `onefile` mode
-- `dist\OpenVikingServer\OpenVikingServer.exe` in `onedir` mode
+- `dist\ClawMemory.exe` in `onefile` mode
+- `dist\ClawMemory\ClawMemory.exe` in `onedir` mode
 
 Double-clicking that file starts the OpenViking server in a console window.
 
@@ -77,7 +98,7 @@ Copy it to your actual `ov.conf` location and adjust API keys, models, and works
 
 ## Release Package
 
-To prepare a distributable folder and zip archive:
+Prepare a distributable folder and zip archive:
 
 ```powershell
 cd d:\HClawCode\HClawMemory\ClawMemory
@@ -90,32 +111,32 @@ Equivalent batch wrapper:
 package_release.bat
 ```
 
-To rebuild the exe first and then package:
+Rebuild the executable first and then package:
 
 ```powershell
-.\package_release.ps1 -RebuildExe
+.\package_release.ps1 -rebuild
 ```
 
-To package an `onedir` build:
+Package an `onedir` build:
 
 ```powershell
-.\package_release.ps1 -Mode onedir -RebuildExe
+.\package_release.ps1 -Mode onedir -rebuild
 ```
 
 This produces:
 
-- `release\OpenVikingServer\`
-- `release\OpenVikingServer-onefile.zip` or `release\OpenVikingServer-onedir.zip`
+- `release\ClawMemory\`
+- `release\ClawMemory-onefile.zip` or `release\ClawMemory-onedir.zip`
 
 ## Notes
 
-- This packaging targets the server executable only.
-- The script automatically runs `pip install -e .` with `OV_DISABLE_OV_CLI=1` when server runtime artifacts are missing.
-- The script also sets `OV_DISABLE_AGFS_SERVER=1`, so packaging follows the `binding-client` route and does not require `agfs-server.exe`.
-- `-RebuildArtifacts` deletes `libagfsbinding.dll` first, then lets the script rebuild it automatically.
-- This route assumes `storage.agfs.mode = "binding-client"`.
-- `-Clean` now also removes any legacy `dist\OpenVikingServer\` onedir output left by older builds.
-- `ov.exe` is not required for server packaging when `OV_DISABLE_OV_CLI=1` is set during build/install.
+- This packaging route targets the server executable only.
+- `protector` files are bundled into `FileProtectDriver\`.
+- At runtime, `ClawMemory.exe` runs `FileProtectDriver\FilterUpdate.cmd` before the server starts.
+- At shutdown, `ClawMemory.exe` runs `FileProtectDriver\FilterUninstall.cmd`.
+- `-rebuild` in `build_exe.ps1` deletes `libagfsbinding.dll` first, then rebuilds it.
+- `-clean` removes old `build\` and `dist\` output.
+- `ov.exe` is not required for server packaging when `OV_DISABLE_OV_CLI=1` is used during build.
 - `onefile` still unpacks runtime files to a temporary directory at startup.
 - Use `-Mode onedir` if you want the traditional extracted app directory instead of a single executable.
 - `build_exe.bat` and `package_release.bat` are thin wrappers around the PowerShell scripts.

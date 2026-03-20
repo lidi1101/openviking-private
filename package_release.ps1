@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [switch]$RebuildExe,
+    [switch]$rebuild,
     [ValidateSet("onefile", "onedir")]
     [string]$Mode = "onefile"
 )
@@ -8,15 +8,21 @@ param(
 $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$packagingConfigPath = Join-Path $projectRoot "packaging_config.ps1"
+if (-not (Test-Path $packagingConfigPath)) {
+    throw "Packaging config not found: $packagingConfigPath"
+}
+. $packagingConfigPath
+
 $distExe = if ($Mode -eq "onedir") {
-    Join-Path $projectRoot "dist\OpenVikingServer\OpenVikingServer.exe"
+    Join-Path $projectRoot "dist\$PackageName\$PackageName.exe"
 } else {
-    Join-Path $projectRoot "dist\OpenVikingServer.exe"
+    Join-Path $projectRoot "dist\$PackageName.exe"
 }
 $releaseRoot = Join-Path $projectRoot "release"
-$releaseAppDir = Join-Path $releaseRoot "OpenVikingServer"
-$releaseExe = Join-Path $releaseAppDir "OpenVikingServer.exe"
-$zipPath = Join-Path $releaseRoot "OpenVikingServer-$Mode.zip"
+$releaseAppDir = Join-Path $releaseRoot $PackageName
+$releaseExe = Join-Path $releaseAppDir "$PackageName.exe"
+$zipPath = Join-Path $releaseRoot "$PackageName-$Mode.zip"
 $buildScript = Join-Path $projectRoot "build_exe.ps1"
 
 function Remove-PathIfExists {
@@ -35,7 +41,7 @@ function Remove-PathIfExists {
 Failed to remove path: $PathToRemove
 
 This usually means an old release executable or one of its extracted files is still in use.
-Close OpenVikingServer.exe and any process using files under this path, then retry.
+Close $PackageName.exe and any process using files under this path, then retry.
 "@
     }
 }
@@ -60,9 +66,11 @@ function Compress-ArchiveWithRetry {
     }
 }
 
-if ($RebuildExe -or -not (Test-Path $distExe)) {
+if ($rebuild -or -not (Test-Path $distExe)) {
     Write-Host "Building executable before packaging release..."
-    & powershell -ExecutionPolicy Bypass -File $buildScript -Clean -Mode $Mode
+    $buildArgs = @("-ExecutionPolicy", "Bypass", "-File", $buildScript, "-clean", "-Mode", $Mode)
+    Write-Host ("Invoking: powershell " + ($buildArgs -join " "))
+    & powershell @buildArgs
     if ($LASTEXITCODE -ne 0) {
         throw "build_exe.ps1 failed with exit code ${LASTEXITCODE}"
     }

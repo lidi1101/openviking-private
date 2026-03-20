@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
-    [switch]$Clean,
-    [switch]$RebuildArtifacts,
+    [switch]$clean,
+    [switch]$rebuild,
+    [switch]$AutoInstall,
     [ValidateSet("onefile", "onedir")]
     [string]$Mode = "onefile"
 )
@@ -9,18 +10,26 @@ param(
 $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$specPath = Join-Path $projectRoot "OpenVikingServer.spec"
+$packagingConfigPath = Join-Path $projectRoot "packaging_config.ps1"
+if (-not (Test-Path $packagingConfigPath)) {
+    throw "Packaging config not found: $packagingConfigPath"
+}
+. $packagingConfigPath
+
+$specPath = Join-Path $projectRoot $SpecFileName
 $distDir = Join-Path $projectRoot "dist"
 $buildDir = Join-Path $projectRoot "build"
 $exePath = if ($Mode -eq "onedir") {
-    Join-Path $distDir "OpenVikingServer\OpenVikingServer.exe"
+    Join-Path $distDir "$PackageName\$PackageName.exe"
 } else {
-    Join-Path $distDir "OpenVikingServer.exe"
+    Join-Path $distDir "$PackageName.exe"
 }
-$legacyOneDirPath = Join-Path $distDir "OpenVikingServer"
+$legacyOneDirPath = Join-Path $distDir $PackageName
 $requiredArtifacts = @(
     (Join-Path $projectRoot "openviking\lib\libagfsbinding.dll")
 )
+$bundledMingwRoot = Join-Path $projectRoot "third_party\mingw64"
+$bundledMingwBin = Join-Path $bundledMingwRoot "bin"
 
 function Get-PythonCommand {
     $candidates = @()
@@ -76,12 +85,110 @@ function Get-MissingArtifacts {
     return $requiredArtifacts | Where-Object { -not (Test-Path $_) }
 }
 
+function Build-RuntimeArtifactsLocally {
+    Write-Host "Trying local runtime artifact build via setup.py build_ext --inplace..."
+    $env:OV_DISABLE_OV_CLI = "1"
+    $env:OV_DISABLE_AGFS_SERVER = "1"
+    Invoke-Python -PythonCmd $pythonCmd -Arguments @("setup.py", "build_ext", "--inplace")
+}
+
+function Install-EditableProject {
+    Write-Host "Falling back to editable install for runtime artifacts..."
+    $env:OV_DISABLE_OV_CLI = "1"
+    $env:OV_DISABLE_AGFS_SERVER = "1"
+    Invoke-Python -PythonCmd $pythonCmd -Arguments @("-m", "pip", "install", "-e", ".")
+}
+
 function Test-CommandAvailable {
     param(
         [string]$CommandName
     )
 
     return $null -ne (Get-Command $CommandName -ErrorAction SilentlyContinue)
+}
+
+function Get-ResolvedCommandSource {
+    param(
+        [string]$CommandName
+    )
+
+    $command = Get-Command $CommandName -ErrorAction SilentlyContinue
+    if (-not $command) {
+        return $null
+    }
+
+    return $command.Source
+}
+
+function Initialize-BundledToolchain {
+    if (-not (Test-Path $bundledMingwBin)) {
+        return
+    }
+
+    $hasBundledGcc = (Test-Path (Join-Path $bundledMingwBin "gcc.exe"))
+    $hasBundledGxx = (Test-Path (Join-Path $bundledMingwBin "g++.exe"))
+    if (-not ($hasBundledGcc -and $hasBundledGxx)) {
+        return
+    }
+
+    $pathEntries = @($env:PATH -split ";" | Where-Object { $_ })
+    if ($pathEntries -contains $bundledMingwBin) {
+        return
+    }
+
+    $env:PATH = "$bundledMingwBin;$env:PATH"
+    Write-Host "Using bundled MinGW toolchain: $bundledMingwBin"
+}
+
+function Show-ResolvedToolchain {
+    $toolchainLines = @()
+    foreach ($tool in @("cmake", "gcc", "g++", "mingw32-make")) {
+        $source = Get-ResolvedCommandSource $tool
+        if ($source) {
+            $toolchainLines += "  $tool -> $source"
+        }
+    }
+
+    if ($toolchainLines.Count -gt 0) {
+        Write-Host "Resolved toolchain:"
+        $toolchainLines | ForEach-Object { Write-Host $_ }
+    }
+}
+
+function Initialize-SetuptoolsScmFallback {
+    $normalizedDistName = "OPENVIKING"
+    $pretendVersionEnvName = "SETUPTOOLS_SCM_PRETEND_VERSION_FOR_${normalizedDistName}"
+    $genericPretendVersionEnvName = "SETUPTOOLS_SCM_PRETEND_VERSION"
+
+    $existingPretendVersion = Get-Item -Path "Env:$pretendVersionEnvName" -ErrorAction SilentlyContinue
+    $existingGenericPretendVersion = Get-Item -Path "Env:$genericPretendVersionEnvName" -ErrorAction SilentlyContinue
+    if ($existingPretendVersion -or $existingGenericPretendVersion) {
+        return
+    }
+
+    if (Test-CommandAvailable "git") {
+        return
+    }
+
+    $versionFile = Join-Path $projectRoot "openviking\_version.py"
+    if (-not (Test-Path $versionFile)) {
+        return
+    }
+
+    $versionLine = Select-String -Path $versionFile -Pattern "^__version__\s*=\s*version\s*=\s*'([^']+)'" |
+        Select-Object -First 1
+    if (-not $versionLine) {
+        return
+    }
+
+    $pretendVersion = $versionLine.Matches[0].Groups[1].Value
+    if (-not $pretendVersion) {
+        return
+    }
+
+    Set-Item -Path "Env:$pretendVersionEnvName" -Value $pretendVersion
+    Set-Item -Path "Env:$genericPretendVersionEnvName" -Value $pretendVersion
+    Write-Host "git not found. Using setuptools-scm fallback version: $pretendVersion"
 }
 
 function Assert-PackagingPrerequisites {
@@ -102,6 +209,18 @@ function Assert-PackagingPrerequisites {
     }
 
     if ($NeedsArtifactBuild) {
+        foreach ($pythonModule in @(
+            @{ Name = "pybind11"; Hint = "pybind11 (install with: pip install pybind11)" },
+            @{ Name = "setuptools"; Hint = "setuptools (install with: pip install -U setuptools)" },
+            @{ Name = "wheel"; Hint = "wheel (install with: pip install wheel)" }
+        )) {
+            try {
+                Invoke-Python -PythonCmd $pythonCmd -Arguments @("-c", "import $($pythonModule.Name)")
+            } catch {
+                $missing += $pythonModule.Hint
+            }
+        }
+
         foreach ($tool in @("go", "cmake", "gcc", "g++")) {
             if (-not (Test-CommandAvailable $tool)) {
                 $missing += $tool
@@ -191,12 +310,13 @@ function Remove-PathIfExists {
 Failed to remove path: $PathToRemove
 
 This usually means an old executable or DLL is still running from that location.
-Close OpenVikingServer.exe and any process using files under this path, then retry.
+Close $PackageName.exe and any process using files under this path, then retry.
 "@
     }
 }
 
 Write-Host "Project root: $projectRoot"
+Write-Host "Package name: $PackageName"
 
 $pythonCmd = Get-PythonCommand
 Write-Host "Using Python: $pythonCmd"
@@ -204,12 +324,16 @@ Write-Host "Build mode: $Mode"
 $env:PYTHONUTF8 = "1"
 $env:PYTHONIOENCODING = "utf-8"
 $env:OV_PYINSTALLER_MODE = $Mode
+$env:OV_PACKAGE_NAME = $PackageName
+Initialize-BundledToolchain
+Show-ResolvedToolchain
+Initialize-SetuptoolsScmFallback
 
 if (-not (Test-Path $specPath)) {
     throw "Spec file not found: $specPath"
 }
 
-if ($Clean) {
+if ($clean) {
     Remove-PathIfExists -PathToRemove $buildDir
     Remove-PathIfExists -PathToRemove $distDir
 } elseif ($Mode -eq "onefile" -and (Test-Path $legacyOneDirPath)) {
@@ -217,7 +341,7 @@ if ($Clean) {
     Remove-PathIfExists -PathToRemove $legacyOneDirPath
 }
 
-if ($RebuildArtifacts) {
+if ($rebuild) {
     Write-Host "Forcing rebuild of runtime artifacts..."
     foreach ($artifact in $requiredArtifacts) {
         if (Test-Path $artifact) {
@@ -230,19 +354,30 @@ Write-Host "Checking build artifacts..."
 $missingArtifacts = Get-MissingArtifacts
 if ($missingArtifacts.Count -gt 0) {
     Assert-PackagingPrerequisites -NeedsArtifactBuild $true
-    Write-Host "Missing runtime artifacts detected. Building them via editable install..."
-    $env:OV_DISABLE_OV_CLI = "1"
-    $env:OV_DISABLE_AGFS_SERVER = "1"
-    Invoke-Python -PythonCmd $pythonCmd -Arguments @("-m", "pip", "install", "-e", ".")
     $missingArtifacts = Get-MissingArtifacts
+
+    if ($missingArtifacts.Count -gt 0) {
+        Build-RuntimeArtifactsLocally
+        $missingArtifacts = Get-MissingArtifacts
+    }
+
+    if ($missingArtifacts.Count -gt 0 -and $AutoInstall) {
+        Install-EditableProject
+        $missingArtifacts = Get-MissingArtifacts
+    }
 }
 
 if ($missingArtifacts.Count -gt 0) {
+    $nextStep = if (-not $AutoInstall) {
+        "Automatic pip installation is disabled unless you pass -AutoInstall."
+    } else {
+        "Local build and editable install were attempted, but the artifacts are still missing."
+    }
     throw @"
 Missing required runtime artifacts:
 $($missingArtifacts -join "`n")
 
-Automatic build was attempted with OV_DISABLE_OV_CLI=1, but the artifacts are still missing.
+$nextStep
 "@
 }
 
@@ -251,7 +386,7 @@ Assert-PackagingPrerequisites -NeedsArtifactBuild $false
 Write-Host "Checking runtime config..."
 Assert-OpenVikingConfig
 
-Write-Host "Building OpenVikingServer.exe..."
+Write-Host "Building $PackageName.exe..."
 Invoke-Python -PythonCmd $pythonCmd -Arguments @("-m", "PyInstaller", "--noconfirm", $specPath)
 
 if (-not (Test-Path $exePath)) {
