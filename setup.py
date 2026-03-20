@@ -1,4 +1,3 @@
-import ctypes
 import json
 import locale
 import os
@@ -13,89 +12,130 @@ from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
 
 ENGINE_SOURCE_DIR = "src/"
+PROJECT_ROOT = Path(__file__).resolve().parent
+BUNDLED_MINGW_ROOT = PROJECT_ROOT / "third_party" / "mingw64"
+BUNDLED_MINGW_BIN = BUNDLED_MINGW_ROOT / "bin"
+WINDOWS_FALLBACK_MINGW_ROOTS = (
+    Path(r"C:\msys64\ucrt64"),
+    Path(r"C:\msys64\mingw64"),
+)
 
 
-def _iter_winget_package_dirs(package_prefix):
-    root = Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WinGet" / "Packages"
-    if not root.exists():
-        return []
-    return sorted(root.glob(f"{package_prefix}*"), reverse=True)
+def _resolve_bundled_tool(tool_name):
+    candidate = BUNDLED_MINGW_BIN / tool_name
+    if candidate.exists():
+        return str(candidate)
+    return None
 
 
-def _resolve_tool_path(tool_names, *, extra_candidates=None, winget_candidates=None):
-    for tool_name in tool_names:
-        resolved = shutil.which(tool_name)
-        if resolved:
-            return resolved
+def _resolve_windows_fallback_tool(tool_name):
+    if sys.platform != "win32":
+        return None
 
-    candidates = [Path(candidate) for candidate in (extra_candidates or [])]
-    for package_prefix, relative_dir in winget_candidates or []:
-        for package_dir in _iter_winget_package_dirs(package_prefix):
-            for tool_name in tool_names:
-                candidates.append(package_dir / relative_dir / tool_name)
-
-    for candidate in candidates:
+    for root in WINDOWS_FALLBACK_MINGW_ROOTS:
+        candidate = root / "bin" / tool_name
         if candidate.exists():
             return str(candidate)
+    return None
 
-    return tool_names[0]
+
+def _parse_gnu_major_version(tool_path):
+    try:
+        result = subprocess.run(
+            [tool_path, "--version"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except Exception:
+        return None
+
+    version_output = (result.stdout or result.stderr).splitlines()
+    if not version_output:
+        return None
+
+    for token in version_output[0].replace("(", " ").replace(")", " ").split():
+        parts = token.split(".")
+        if parts and parts[0].isdigit():
+            return int(parts[0])
+    return None
 
 
-def _prepend_tool_dirs(*tool_paths):
-    current_path = os.environ.get("PATH", "")
-    existing_parts = current_path.split(os.pathsep) if current_path else []
-    prepended = []
+def _prepend_tool_dirs_to_path(path_value, tool_paths):
+    seen = set()
+    parts = []
+
     for tool_path in tool_paths:
+        if not tool_path:
+            continue
         tool_dir = str(Path(tool_path).resolve().parent)
-        if tool_dir not in prepended:
-            prepended.append(tool_dir)
-    os.environ["PATH"] = os.pathsep.join(prepended + existing_parts)
+        norm_tool_dir = os.path.normcase(tool_dir)
+        if norm_tool_dir in seen:
+            continue
+        seen.add(norm_tool_dir)
+        parts.append(tool_dir)
+
+    for part in path_value.split(os.pathsep):
+        if not part:
+            continue
+        norm_part = os.path.normcase(part)
+        if norm_part in seen:
+            continue
+        seen.add(norm_part)
+        parts.append(part)
+
+    return os.pathsep.join(parts)
 
 
-CMAKE_PATH = _resolve_tool_path(
-    ["cmake", "cmake.exe"],
-    extra_candidates=[r"C:\Program Files\CMake\bin\cmake.exe"],
-    winget_candidates=[
-        ("Kitware.CMake", "bin"),
-        ("BrechtSanders.WinLibs.POSIX.UCRT", "mingw64/bin"),
-    ],
-)
-C_COMPILER_PATH = _resolve_tool_path(
-    ["gcc", "gcc.exe"],
-    winget_candidates=[("BrechtSanders.WinLibs.POSIX.UCRT", "mingw64/bin")],
-)
-CXX_COMPILER_PATH = _resolve_tool_path(
-    ["g++", "g++.exe"],
-    winget_candidates=[("BrechtSanders.WinLibs.POSIX.UCRT", "mingw64/bin")],
-)
-_prepend_tool_dirs(CMAKE_PATH, C_COMPILER_PATH, CXX_COMPILER_PATH)
+def _resolve_tool(env_name, tool_name):
+    return (
+        os.environ.get(env_name)
+        or _resolve_bundled_tool(f"{tool_name}.exe" if sys.platform == "win32" else tool_name)
+        or _resolve_windows_fallback_tool(
+            f"{tool_name}.exe" if sys.platform == "win32" else tool_name
+        )
+        or shutil.which(tool_name)
+        or tool_name
+    )
+
+
+CMAKE_PATH = _resolve_tool("CMAKE", "cmake")
+C_COMPILER_PATH = _resolve_tool("CC", "gcc")
+CXX_COMPILER_PATH = _resolve_tool("CXX", "g++")
+
+if sys.platform == "win32" and not os.environ.get("CC") and not os.environ.get("CXX"):
+    detected_gxx_major = _parse_gnu_major_version(CXX_COMPILER_PATH)
+    fallback_gxx = _resolve_windows_fallback_tool("g++.exe")
+    fallback_gcc = _resolve_windows_fallback_tool("gcc.exe")
+    fallback_gxx_major = _parse_gnu_major_version(fallback_gxx) if fallback_gxx else None
+
+    # Prefer a modern MSYS2 toolchain over the legacy conda-provided GCC 5.x.
+    if (
+        fallback_gxx
+        and fallback_gcc
+        and fallback_gxx_major is not None
+        and fallback_gxx_major >= 11
+        and (detected_gxx_major is None or detected_gxx_major < 11)
+    ):
+        print(
+            "[Info] Switching Windows C/C++ toolchain to "
+            f"{fallback_gxx} (detected GCC {fallback_gxx_major})"
+        )
+        C_COMPILER_PATH = fallback_gcc
+        CXX_COMPILER_PATH = fallback_gxx
+
+if sys.platform == "win32":
+    os.environ["PATH"] = _prepend_tool_dirs_to_path(
+        os.environ.get("PATH", ""),
+        (CMAKE_PATH, C_COMPILER_PATH, CXX_COMPILER_PATH),
+    )
 
 
 def _console_safe(text):
     """Return text that can always be printed to the current console."""
     encoding = getattr(sys.stdout, "encoding", None) or locale.getpreferredencoding(False) or "utf-8"
     return text.encode(encoding, errors="replace").decode(encoding, errors="replace")
-
-
-def _is_loadable_windows_dll(path: Path) -> bool:
-    """Return whether a Windows DLL can be loaded by the current process."""
-    if sys.platform != "win32":
-        return True
-    if not path.exists():
-        return False
-
-    dll_dir = path.parent.resolve()
-    add_dir = getattr(os, "add_dll_directory", None)
-    handle = add_dir(str(dll_dir)) if add_dir else None
-    try:
-        ctypes.CDLL(str(path))
-        return True
-    except OSError as exc:
-        print(f"[Warning] Failed to load {path}: {exc}")
-        return False
-    finally:
-        if handle is not None:
-            handle.close()
 
 
 class OpenVikingBuildExt(build_ext):
@@ -136,6 +176,47 @@ class OpenVikingBuildExt(build_ext):
                 self._copy_artifact(target_binary, build_pkg_dir / "bin" / target_binary.name)
             if target_lib and target_lib.exists():
                 self._copy_artifact(target_lib, build_pkg_dir / "lib" / target_lib.name)
+
+    def _resolve_python_library(self):
+        """Resolve the Windows import library for the active interpreter when available."""
+        version_tag = f"python{sys.version_info.major}{sys.version_info.minor}.lib"
+        candidates = [
+            Path(sys.executable).resolve().parent / "libs" / version_tag,
+            Path(sys.base_prefix).resolve() / "libs" / version_tag,
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        return None
+
+    def _clear_stale_cmake_cache(self, build_dir):
+        """Drop cached CMake state when it points at a different Python interpreter."""
+        cache_path = Path(build_dir) / "CMakeCache.txt"
+        if not cache_path.exists():
+            return
+
+        try:
+            cache_text = cache_path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            print(f"[Warning] Failed to read CMake cache {cache_path}: {exc}")
+            return
+
+        current_python = str(Path(sys.executable).resolve()).replace("\\", "/").lower()
+        cached_python = None
+        for line in cache_text.splitlines():
+            if line.startswith("Python3_EXECUTABLE:FILEPATH=") or line.startswith(
+                "_Python3_EXECUTABLE:INTERNAL="
+            ):
+                cached_python = line.split("=", 1)[1].replace("\\", "/").lower()
+                break
+
+        if cached_python and cached_python != current_python:
+            print(
+                "Detected stale CMake Python cache "
+                f"({cached_python} != {current_python}); removing {build_dir}"
+            )
+            shutil.rmtree(build_dir, ignore_errors=True)
+            Path(build_dir).mkdir(parents=True, exist_ok=True)
 
     def _require_artifact(self, artifact_path, artifact_name, stage_name):
         """Abort the build immediately when a required artifact is missing."""
@@ -241,9 +322,7 @@ class OpenVikingBuildExt(build_ext):
                 return
 
         if os.environ.get("OV_SKIP_AGFS_BUILD") == "1":
-            if _is_loadable_windows_dll(agfs_target_lib) and (
-                not require_server_binary or agfs_target_binary.exists()
-            ):
+            if agfs_target_lib.exists() and (not require_server_binary or agfs_target_binary.exists()):
                 print("[OK] Skipping AGFS build, using existing artifacts")
                 return
             print("[Warning] OV_SKIP_AGFS_BUILD=1 but artifacts are missing. Will try to build.")
@@ -333,9 +412,7 @@ class OpenVikingBuildExt(build_ext):
                 print(_console_safe(f"[Error] {error_msg}"))
                 raise RuntimeError(error_msg)
         else:
-            if _is_loadable_windows_dll(agfs_target_lib) and (
-                not require_server_binary or agfs_target_binary.exists()
-            ):
+            if agfs_target_lib.exists() and (not require_server_binary or agfs_target_binary.exists()):
                 print("[Info] AGFS artifacts already exist locally. Skipping source build.")
             elif not agfs_server_dir.exists():
                 print(f"[Warning] AGFS source directory not found at {agfs_server_dir}")
@@ -469,8 +546,16 @@ class OpenVikingBuildExt(build_ext):
 
     def _build_extension_impl(self, ext_fullpath, ext_dir, build_dir):
         """Invoke CMake to build the Python native extension."""
+        self._clear_stale_cmake_cache(build_dir)
+
         py_output_name = ext_fullpath.stem
         py_output_suffix = ext_fullpath.suffix
+        python_root = Path(sys.executable).resolve().parent
+        python_include = Path(sysconfig.get_path("include")).resolve()
+        python_library = self._resolve_python_library()
+        python_executable = Path(sys.executable).resolve().as_posix()
+        python_root_arg = python_root.as_posix()
+        python_include_arg = python_include.as_posix()
 
         cmake_args = [
             f"-S{Path(ENGINE_SOURCE_DIR).resolve()}",
@@ -481,15 +566,24 @@ class OpenVikingBuildExt(build_ext):
             f"-DPY_OUTPUT_SUFFIX={py_output_suffix}",
             "-DCMAKE_VERBOSE_MAKEFILE=ON",
             "-DCMAKE_INSTALL_RPATH=$ORIGIN",
-            f"-DPython3_EXECUTABLE={sys.executable}",
-            f"-DPython3_INCLUDE_DIRS={sysconfig.get_path('include')}",
-            f"-DPython3_LIBRARIES={sysconfig.get_config_vars().get('LIBRARY')}",
+            f"-DPython3_EXECUTABLE={python_executable}",
+            f"-DPython3_ROOT_DIR={python_root_arg}",
+            f"-DPython_ROOT_DIR={python_root_arg}",
+            "-DPython3_FIND_REGISTRY=NEVER",
+            "-DPython3_FIND_STRATEGY=LOCATION",
+            "-DPython3_FIND_VIRTUALENV=ONLY",
+            f"-DPython3_INCLUDE_DIR={python_include_arg}",
+            f"-DPython3_INCLUDE_DIRS={python_include_arg}",
             f"-Dpybind11_DIR={pybind11.get_cmake_dir()}",
             f"-DCMAKE_C_COMPILER={C_COMPILER_PATH}",
             f"-DCMAKE_CXX_COMPILER={CXX_COMPILER_PATH}",
             f"-DOV_X86_SIMD_LEVEL={os.environ.get('OV_X86_SIMD_LEVEL', 'AVX2')}",
         ]
 
+        if python_library:
+            python_library_arg = python_library.resolve().as_posix()
+            cmake_args.append(f"-DPython3_LIBRARY={python_library_arg}")
+            cmake_args.append(f"-DPython3_LIBRARIES={python_library_arg}")
         if sys.platform == "darwin":
             cmake_args.append("-DCMAKE_OSX_DEPLOYMENT_TARGET=10.15")
             target_arch = os.environ.get("CMAKE_OSX_ARCHITECTURES")
@@ -497,6 +591,9 @@ class OpenVikingBuildExt(build_ext):
                 cmake_args.append(f"-DCMAKE_OSX_ARCHITECTURES={target_arch}")
         elif sys.platform == "win32":
             cmake_args.extend(["-G", "MinGW Makefiles"])
+            bundled_make = _resolve_bundled_tool("mingw32-make.exe")
+            if bundled_make:
+                cmake_args.append(f"-DCMAKE_MAKE_PROGRAM={bundled_make}")
 
         self.spawn([self.cmake_executable] + cmake_args)
 

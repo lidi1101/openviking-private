@@ -7,6 +7,7 @@ $envPrefix = if ($env:OPENVIKING_ENV_PREFIX) { $env:OPENVIKING_ENV_PREFIX } else
 $pythonExe = Join-Path $envPrefix "python.exe"
 $proxyScript = Join-Path $PSScriptRoot "honor_embedding_proxy.py"
 $defaultSourceFile = Join-Path $HOME "Downloads\emb_requests.py"
+$repoSourceFile = Join-Path $repoRoot "emb_requests.py"
 
 if (-not (Test-Path $pythonExe)) {
     throw "Python executable not found: $pythonExe"
@@ -16,8 +17,12 @@ if (-not (Test-Path $proxyScript)) {
     throw "Proxy script not found: $proxyScript"
 }
 
-if (-not $env:HONOR_EMBED_SOURCE_FILE -and (Test-Path $defaultSourceFile)) {
-    $env:HONOR_EMBED_SOURCE_FILE = $defaultSourceFile
+if (-not $env:HONOR_EMBED_SOURCE_FILE) {
+    if (Test-Path $defaultSourceFile) {
+        $env:HONOR_EMBED_SOURCE_FILE = $defaultSourceFile
+    } elseif (Test-Path $repoSourceFile) {
+        $env:HONOR_EMBED_SOURCE_FILE = $repoSourceFile
+    }
 }
 
 $env:PATH = @(

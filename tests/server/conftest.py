@@ -15,11 +15,15 @@ import pytest_asyncio
 import uvicorn
 
 from openviking import AsyncOpenViking
+from openviking.models.embedder.base import EmbedResult
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig
 from openviking.server.identity import RequestContext, Role
 from openviking.service.core import OpenVikingService
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.embedding_config import EmbeddingConfig
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+from openviking_cli.utils.config.vlm_config import VLMConfig
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -44,6 +48,41 @@ This is a sample markdown document for server testing.
 """
 
 
+class _FakeEmbedder:
+    is_sparse = False
+
+    def embed(self, text: str) -> EmbedResult:
+        seed = max(len(text.strip()), 1)
+        return EmbedResult(dense_vector=[float(seed % 7 or 1)] * 8)
+
+    def embed_batch(self, texts: list[str]) -> list[EmbedResult]:
+        return [self.embed(text) for text in texts]
+
+    def close(self) -> None:
+        return None
+
+
+class _FakeVLM:
+    def get_completion(self, prompt: str, thinking: bool = False) -> str:
+        prompt_lower = prompt.lower()
+        if "overview" in prompt_lower:
+            return "# Overview\n\nSynthetic test overview."
+        if "abstract" in prompt_lower or "summary" in prompt_lower:
+            return "Synthetic test abstract."
+        return "Synthetic test completion."
+
+    async def get_completion_async(self, prompt: str, thinking: bool = False, max_retries: int = 0):
+        return self.get_completion(prompt, thinking)
+
+    def get_vision_completion(self, prompt: str, images: list, thinking: bool = False) -> str:
+        return self.get_completion(prompt, thinking)
+
+    async def get_vision_completion_async(
+        self, prompt: str, images: list, thinking: bool = False
+    ) -> str:
+        return self.get_completion(prompt, thinking)
+
+
 # ---------------------------------------------------------------------------
 # Core fixtures: service + app + async client (HTTP API tests, in-process)
 # ---------------------------------------------------------------------------
@@ -58,6 +97,37 @@ def temp_dir():
     unique_dir.mkdir(parents=True, exist_ok=True)
     yield unique_dir
     shutil.rmtree(unique_dir, ignore_errors=True)
+
+
+@pytest.fixture(scope="function", autouse=True)
+def isolated_openviking_config(temp_dir: Path, monkeypatch):
+    OpenVikingConfigSingleton.reset_instance()
+    OpenVikingConfigSingleton.initialize(
+        config_dict={
+            "storage": {
+                "workspace": str(temp_dir / "config_data"),
+                "agfs": {"backend": "local"},
+                "vectordb": {"backend": "local"},
+            },
+            "embedding": {
+                "dense": {
+                    "provider": "openai",
+                    "model": "test-embedding",
+                    "api_key": "test-key",
+                    "dimension": 8,
+                }
+            },
+            "vlm": {
+                "provider": "openai",
+                "model": "test-vlm",
+                "api_key": "test-key",
+            },
+        }
+    )
+    monkeypatch.setattr(EmbeddingConfig, "get_embedder", lambda self: _FakeEmbedder())
+    monkeypatch.setattr(VLMConfig, "get_vlm_instance", lambda self: _FakeVLM())
+    yield
+    OpenVikingConfigSingleton.reset_instance()
 
 
 @pytest.fixture(scope="function")

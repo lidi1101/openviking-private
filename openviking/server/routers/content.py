@@ -3,6 +3,7 @@
 """Content endpoints for OpenViking HTTP Server."""
 
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel
 
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
@@ -10,6 +11,13 @@ from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 
 router = APIRouter(prefix="/api/v1/content", tags=["content"])
+
+
+class WriteRequest(BaseModel):
+    """Request model for direct file writes."""
+
+    uri: str
+    content: str
 
 
 @router.get("/read")
@@ -45,3 +53,14 @@ async def overview(
     service = get_service()
     result = await service.fs.overview(uri, ctx=_ctx)
     return Response(status="ok", result=result)
+
+
+@router.post("/write")
+async def write(
+    request: WriteRequest,
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Write plain text content directly to a Viking URI."""
+    service = get_service()
+    await service.fs.write_file(request.uri, request.content, ctx=_ctx)
+    return Response(status="ok", result={"uri": request.uri})
