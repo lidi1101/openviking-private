@@ -281,16 +281,24 @@ function Expand-ArchiveWithShell {
         [string]$DestinationPath
     )
 
-    $shell = New-Object -ComObject Shell.Application
-    $archiveNamespace = $shell.NameSpace($ArchivePath)
-    $destinationNamespace = $shell.NameSpace($DestinationPath)
+    try {
+        $shell = New-Object -ComObject Shell.Application
+        $archiveNamespace = $shell.NameSpace($ArchivePath)
+        $destinationNamespace = $shell.NameSpace($DestinationPath)
+    } catch {
+        return $false
+    }
 
     if (-not $archiveNamespace -or -not $destinationNamespace) {
         return $false
     }
 
-    $destinationNamespace.CopyHere($archiveNamespace.Items(), 0x10)
-    return $true
+    try {
+        $destinationNamespace.CopyHere($archiveNamespace.Items(), 0x10)
+        return $true
+    } catch {
+        return $false
+    }
 }
 
 function Get-BundledToolchainArchivePath {
@@ -301,6 +309,38 @@ function Get-BundledToolchainArchivePath {
     }
 
     return $null
+}
+
+function Join-SplitArchiveParts {
+    param(
+        [string]$FirstPartPath
+    )
+
+    $firstPartItem = Get-Item $FirstPartPath
+    $partPattern = "{0}.???" -f $firstPartItem.BaseName
+    $partItems = @(Get-ChildItem -Path $firstPartItem.DirectoryName -File -Filter $partPattern | Sort-Object Name)
+    if ($partItems.Count -eq 0 -or $partItems[0].FullName -ne $firstPartItem.FullName) {
+        throw "Split archive parts are incomplete or out of order: $FirstPartPath"
+    }
+
+    $mergedArchiveName = "{0}-{1}.7z" -f [System.IO.Path]::GetFileNameWithoutExtension($firstPartItem.BaseName), [guid]::NewGuid().ToString("N")
+    $mergedArchivePath = Join-Path ([System.IO.Path]::GetTempPath()) $mergedArchiveName
+    $outputStream = [System.IO.File]::Open($mergedArchivePath, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+
+    try {
+        foreach ($partItem in $partItems) {
+            $inputStream = [System.IO.File]::OpenRead($partItem.FullName)
+            try {
+                $inputStream.CopyTo($outputStream)
+            } finally {
+                $inputStream.Dispose()
+            }
+        }
+    } finally {
+        $outputStream.Dispose()
+    }
+
+    return $mergedArchivePath
 }
 
 function Expand-BundledToolchainArchive {
@@ -323,6 +363,23 @@ function Expand-BundledToolchainArchive {
     if ($isMultipart7z) {
         Write-Warning "Detected split 7-Zip archive: $ArchivePath"
         Write-Warning "Split .7z.001 archives are most reliable with 7-Zip. Install 7-Zip if Shell extraction fails."
+
+        if (Test-CommandAvailable "tar") {
+            $mergedArchivePath = $null
+            try {
+                $mergedArchivePath = Join-SplitArchiveParts -FirstPartPath $ArchivePath
+                Write-Host "Extracting bundled MinGW toolchain with tar.exe from merged split archive ..."
+                & tar "-xf" $mergedArchivePath "-C" $destinationRoot
+                if ($LASTEXITCODE -ne 0) {
+                    throw "Failed to extract bundled MinGW toolchain from merged split archive $ArchivePath with tar.exe"
+                }
+                return
+            } finally {
+                if ($mergedArchivePath -and (Test-Path $mergedArchivePath)) {
+                    Remove-Item -Path $mergedArchivePath -Force -ErrorAction SilentlyContinue
+                }
+            }
+        }
     }
 
     if ((-not $isMultipart7z) -and (Test-CommandAvailable "tar") -and $ArchivePath.ToLowerInvariant().EndsWith(".7z")) {
