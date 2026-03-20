@@ -18,7 +18,7 @@ router = APIRouter(prefix="/api/v1/localdb", tags=["localdb"])
 
 
 class IngestBody(BaseModel):
-    db_path: str | None = None
+    db_path: str
     user_space: str
     source: str
     config_path: str
@@ -52,7 +52,7 @@ async def ingest_localdb(
 
     report = await ingest(
         IngestRequest(
-            db_path=body.db_path or "",
+            db_path=body.db_path,
             user_space=body.user_space,
             source=body.source,
             config_path=body.config_path,

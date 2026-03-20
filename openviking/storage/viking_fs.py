@@ -1297,20 +1297,19 @@ class VikingFS:
         content: str,
         ctx: Optional[RequestContext] = None,
     ) -> None:
-        """Append content to file."""
+        """Append content by rewriting the full file."""
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
+        payload = content.encode("utf-8")
 
         try:
-            existing = ""
-            try:
-                existing_bytes = self._handle_agfs_read(self.agfs.read(path))
-                existing = self._decode_bytes(existing_bytes)
-            except Exception:
-                pass
-
             await self._ensure_parent_dirs(path)
-            self.agfs.write(path, (existing + content).encode("utf-8"))
+            try:
+                existing = self._handle_agfs_read(self.agfs.read(path))
+            except Exception:
+                existing = b""
+
+            self.agfs.write(path, existing + payload)
 
         except Exception as e:
             logger.error(f"[VikingFS] Failed to append to file {uri}: {e}")

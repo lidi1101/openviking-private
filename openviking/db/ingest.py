@@ -13,9 +13,8 @@ from .config import load_mapping_config
 from .normalize import build_event
 from .sqlite_reader import iter_rows, open_sqlite_readonly
 from .types import IngestItemReport, IngestReport, IngestRequest
-from .writer import append_jsonl
+from .writer import append_jsonl_lines
 
-YOYO_SQLITE_DB_PATH = r"D:\HONOR Share\YOYO History\yoyochat2.db"
 YOYO_TABLE_OUTPUT_URIS = {
     "userinformation": "viking://yoyo/userinformation/default/userinformation.jsonl",
     "usertendencies": "viking://yoyo/usertendencies/default/usertendencies.jsonl",
@@ -28,8 +27,11 @@ def _normalize_table_name(table: Optional[str]) -> str:
     return "".join(ch for ch in table if ch.isalnum()).casefold()
 
 
-def _resolve_db_path(_: IngestRequest) -> str:
-    return YOYO_SQLITE_DB_PATH
+def _resolve_db_path(request: IngestRequest) -> str:
+    db_path = request.db_path.strip()
+    if not db_path:
+        raise ValueError("db_path is required")
+    return db_path
 
 
 def _resolve_output_uri(
@@ -97,6 +99,7 @@ async def ingest(request: IngestRequest) -> IngestReport:
                     if not report.output_uri:
                         report.output_uri = item_output_uri
 
+                pending_events = []
                 for row in iter_rows(conn, item.sql, params=params):
                     item_report.rows += 1
                     report.total_rows += 1
@@ -116,9 +119,12 @@ async def ingest(request: IngestRequest) -> IngestReport:
                         report.samples.append(event)
 
                     if not request.dry_run:
-                        await append_jsonl(item_output_uri, event, ctx=ctx)
-                        item_report.written += 1
-                        report.written += 1
+                        pending_events.append(event)
+
+                if not request.dry_run and pending_events:
+                    await append_jsonl_lines(item_output_uri, pending_events, ctx=ctx)
+                    item_report.written += len(pending_events)
+                    report.written += len(pending_events)
 
             except Exception as e:
                 item_report.failed += 1
