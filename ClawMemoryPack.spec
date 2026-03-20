@@ -28,6 +28,10 @@ datas += collect_data_files("openviking", include_py_files=False)
 datas += collect_data_files("openviking_cli", include_py_files=False)
 datas += collect_data_files("litellm", include_py_files=False)
 
+internal_embed_source = PROJECT_ROOT / "emb_requests.py"
+if internal_embed_source.exists():
+    datas.append((str(internal_embed_source), "."))
+
 binaries += collect_dynamic_libs("openviking")
 binaries += collect_dynamic_libs("litellm")
 
