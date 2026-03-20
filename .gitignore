@@ -120,6 +120,10 @@ logs/
 *.tmp
 *.temp
 .tmp/
+.codex-tmp/
+.gocache/
+.gomodcache/
+.runtime/
 ov.conf
 
 # Jupyter Notebook
