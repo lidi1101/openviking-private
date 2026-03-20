@@ -1,12 +1,20 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
-from typing import Any, Dict, Optional
+from typing import Any, ClassVar, Dict, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
 
 class VLMConfig(BaseModel):
     """VLM configuration, supports multiple provider backends."""
+
+    _PLACEHOLDER_API_KEYS: ClassVar[set[str]] = {
+        "replace-with-your-vlm-api-key",
+        "your-api-key",
+        "your-openai-api-key",
+        "sk-your-key",
+        "dummy",
+    }
 
     model: Optional[str] = Field(default=None, description="Model name")
     api_key: Optional[str] = Field(default=None, description="API key")
@@ -143,6 +151,16 @@ class VLMConfig(BaseModel):
 
         return result
 
+    @classmethod
+    def _is_placeholder_api_key(cls, value: str | None) -> bool:
+        raw = str(value or "").strip()
+        if not raw:
+            return False
+        lowered = raw.lower()
+        if lowered in cls._PLACEHOLDER_API_KEYS:
+            return True
+        return "replace-with-your" in lowered
+
     def get_completion(self, prompt: str, thinking: bool = False) -> str:
         """Get LLM completion."""
         return self.get_vlm_instance().get_completion(prompt, thinking)
@@ -155,7 +173,10 @@ class VLMConfig(BaseModel):
 
     def is_available(self) -> bool:
         """Check if LLM is configured."""
-        return self._get_effective_api_key() is not None
+        api_key = self._get_effective_api_key()
+        if api_key is None:
+            return False
+        return not self._is_placeholder_api_key(api_key)
 
     def get_vision_completion(
         self,

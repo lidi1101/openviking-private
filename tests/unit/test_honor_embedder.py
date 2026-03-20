@@ -1,69 +1,131 @@
-"""Tests for the Honor embedding provider."""
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
-import pytest
-
-from openviking.models.embedder import HonorDenseEmbedder
+from openviking.models.embedder.honor_embedders import HonorDenseEmbedder
+from openviking_cli.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
 
 
-class TestHonorDenseEmbedder:
-    def test_init_requires_credentials_or_source(self):
-        with pytest.raises(ValueError, match="Honor provider requires either 'source_file'"):
-            HonorDenseEmbedder(model_name="honor-embedding", dimension=4)
+class _FakeResponse:
+    def __init__(self, payload):
+        self._payload = payload
 
-    @patch("openviking.models.embedder.honor_embedders.requests.post")
-    def test_embed_via_hmac(self, mock_post):
-        mock_response = MagicMock()
-        mock_response.json.return_value = {"data": [{"embeddings": [0.1, 0.2, 0.3, 0.4]}]}
-        mock_response.raise_for_status.return_value = None
-        mock_post.return_value = mock_response
+    def raise_for_status(self):
+        return None
 
-        embedder = HonorDenseEmbedder(
-            model_name="honor-embedding",
-            access_key="test-ak",
-            secret_key="test-sk",
-            api_url="https://example.com/embedding",
-            dimension=4,
-        )
+    def json(self):
+        return self._payload
 
-        result = embedder.embed("hello")
 
-        assert result.dense_vector == [0.1, 0.2, 0.3, 0.4]
-        mock_post.assert_called_once()
+def test_honor_embedding_config_builds_native_embedder(tmp_path: Path):
+    source_file = tmp_path / "emb_requests.py"
+    source_file.write_text(
+        "def send_emb_request(texts):\n"
+        "    return [[1.0, 2.0, 3.0]]\n",
+        encoding="utf-8",
+    )
 
-    def test_embed_via_source_file(self, tmp_path: Path):
-        source_file = tmp_path / "honor_source.py"
-        source_file.write_text(
-            "def send_emb_request(query_list):\n"
-            "    assert isinstance(query_list, list)\n"
-            "    return [0.5, 0.6, 0.7]\n",
-            encoding="utf-8",
-        )
-
-        embedder = HonorDenseEmbedder(
-            model_name="honor-embedding",
-            source_file=str(source_file),
+    config = EmbeddingConfig(
+        dense=EmbeddingModelConfig(
+            provider="honor",
+            model="honor-embedding",
             dimension=3,
+            source_file=str(source_file),
         )
+    )
 
-        result = embedder.embed("hello")
-        assert result.dense_vector == [0.5, 0.6, 0.7]
+    embedder = config.get_embedder()
+    assert isinstance(embedder, HonorDenseEmbedder)
+    assert embedder.get_dimension() == 3
 
-    @patch("openviking.models.embedder.honor_embedders.requests.post")
-    def test_embed_batch_count_mismatch_raises(self, mock_post):
-        mock_response = MagicMock()
-        mock_response.json.return_value = {"data": [{"embeddings": [0.1, 0.2]}]}
-        mock_response.raise_for_status.return_value = None
-        mock_post.return_value = mock_response
 
-        embedder = HonorDenseEmbedder(
-            model_name="honor-embedding",
-            access_key="test-ak",
-            secret_key="test-sk",
-            dimension=2,
+def test_honor_embedder_posts_signed_request_and_parses_response(monkeypatch):
+    calls = []
+
+    def _fake_post(url, json, headers, timeout):
+        calls.append(
+            {
+                "url": url,
+                "json": json,
+                "headers": headers,
+                "timeout": timeout,
+            }
         )
+        return _FakeResponse({"data": [{"embeddings": [0.1, 0.2, 0.3]}]})
 
-        with pytest.raises(RuntimeError, match="result count mismatch"):
-            embedder.embed_batch(["hello", "world"])
+    monkeypatch.setattr("openviking.models.embedder.honor_embedders.requests.post", _fake_post)
+
+    embedder = HonorDenseEmbedder(
+        model_name="honor-embedding",
+        api_base="https://example.com/embedding",
+        dimension=3,
+        hmac_access_key="test-ak",
+        hmac_secret_key="test-sk",
+    )
+
+    result = embedder.embed("hello")
+
+    assert result.dense_vector == [0.1, 0.2, 0.3]
+    assert calls[0]["url"] == "https://example.com/embedding"
+    assert calls[0]["json"] == {"query": ["hello"]}
+    assert calls[0]["headers"]["X-HMAC-ACCESS-KEY"] == "test-ak"
+    assert calls[0]["headers"]["X-HMAC-ALGORITHM"] == "hmac-sha256"
+
+
+def test_honor_embedder_does_not_auto_load_default_source_file(monkeypatch):
+    calls = []
+
+    def _fake_post(url, json, headers, timeout):
+        calls.append(
+            {
+                "url": url,
+                "json": json,
+                "headers": headers,
+                "timeout": timeout,
+            }
+        )
+        return _FakeResponse({"data": [{"embeddings": [0.1, 0.2, 0.3]}]})
+
+    monkeypatch.delenv("HONOR_EMBED_SOURCE_FILE", raising=False)
+    monkeypatch.setattr("openviking.models.embedder.honor_embedders.requests.post", _fake_post)
+
+    embedder = HonorDenseEmbedder(
+        model_name="honor-embedding",
+        api_base="https://example.com/embedding",
+        dimension=3,
+        hmac_access_key="test-ak",
+        hmac_secret_key="test-sk",
+    )
+
+    result = embedder.embed("hello")
+
+    assert result.dense_vector == [0.1, 0.2, 0.3]
+    assert len(calls) == 1
+    assert embedder.source_file is None
+
+
+def test_honor_embedder_detects_dimension_from_source_file(tmp_path: Path):
+    source_file = tmp_path / "emb_requests.py"
+    source_file.write_text(
+        "def send_emb_request(texts):\n"
+        "    text = texts[0]\n"
+        "    return [[float(len(text)), 2.0, 3.0, 4.0]]\n",
+        encoding="utf-8",
+    )
+
+    config = EmbeddingConfig(
+        dense=EmbeddingModelConfig(
+            provider="honor",
+            model="honor-embedding",
+            source_file=str(source_file),
+        )
+    )
+
+    assert config.get_dimension() == 4
+
+    embedder = config.get_embedder()
+    batch = embedder.embed_batch(["a", "abcd"])
+
+    assert batch[0].dense_vector == [1.0, 2.0, 3.0, 4.0]
+    assert batch[1].dense_vector == [4.0, 2.0, 3.0, 4.0]

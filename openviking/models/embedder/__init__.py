@@ -44,6 +44,7 @@ __all__ = [
     "SparseEmbedderBase",
     "HybridEmbedderBase",
     "CompositeHybridEmbedder",
+    "HonorDenseEmbedder",
     # Jina AI implementations
     "JinaDenseEmbedder",
     # Honor implementations

@@ -205,6 +205,13 @@ def test_vlm_validation():
     else:
         print(f"   Fail (provider='volcengine' should have priority, got '{config_b.provider}')")
 
+    # Case C: Placeholder key should not be treated as available at runtime
+    config_c = VLMConfig(provider="openai", model="gpt-4", api_key="replace-with-your-vlm-api-key")
+    if not config_c.is_available():
+        print("   Pass (placeholder api_key is treated as unavailable at runtime)")
+    else:
+        print("   Fail (placeholder api_key should not be treated as available)")
+
 
 if __name__ == "__main__":
     print("\nStarting config validator tests...\n")

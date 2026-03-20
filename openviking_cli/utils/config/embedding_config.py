@@ -13,20 +13,31 @@ class EmbeddingModelConfig(BaseModel):
     api_base: Optional[str] = Field(default=None, description="API base URL")
     dimension: Optional[int] = Field(default=None, description="Embedding dimension")
     batch_size: int = Field(default=32, description="Batch size for embedding generation")
+    timeout_s: float = Field(default=60.0, description="Request timeout in seconds")
     input: str = Field(default="multimodal", description="Input type: 'text' or 'multimodal'")
     provider: Optional[str] = Field(
         default="volcengine",
-        description="Provider type: 'openai', 'volcengine', 'vikingdb', 'jina'",
+        description="Provider type: 'openai', 'volcengine', 'vikingdb', 'jina', 'honor'",
     )
     backend: Optional[str] = Field(
         default="volcengine",
-        description="Backend type (Deprecated, use 'provider' instead): 'openai', 'volcengine', 'vikingdb'",
+        description="Backend type (Deprecated, use 'provider' instead): 'openai', 'volcengine', 'vikingdb', 'honor'",
     )
     version: Optional[str] = Field(default=None, description="Model version")
     ak: Optional[str] = Field(default=None, description="Access Key ID for VikingDB API")
     sk: Optional[str] = Field(default=None, description="Access Key Secretfor VikingDB API")
     region: Optional[str] = Field(default=None, description="Region for VikingDB API")
     host: Optional[str] = Field(default=None, description="Host for VikingDB API")
+    source_file: Optional[str] = Field(default=None, description="Local source file for Honor embedding")
+    source_function: Optional[str] = Field(
+        default=None, description="Function name loaded from the Honor embedding source file"
+    )
+    hmac_access_key: Optional[str] = Field(default=None, description="Honor HMAC access key")
+    hmac_secret_key: Optional[str] = Field(default=None, description="Honor HMAC secret key")
+    hmac_signed_headers: list[str] = Field(
+        default_factory=lambda: ["User-Agent"],
+        description="Signed headers for Honor HMAC embedding requests",
+    )
 
     model_config = {"extra": "forbid"}
 
@@ -53,9 +64,9 @@ class EmbeddingModelConfig(BaseModel):
         if not self.provider:
             raise ValueError("Embedding provider is required")
 
-        if self.provider not in ["openai", "volcengine", "vikingdb", "jina"]:
+        if self.provider not in ["openai", "volcengine", "vikingdb", "jina", "honor"]:
             raise ValueError(
-                f"Invalid embedding provider: '{self.provider}'. Must be one of: 'openai', 'volcengine', 'vikingdb', 'jina'"
+                f"Invalid embedding provider: '{self.provider}'. Must be one of: 'openai', 'volcengine', 'vikingdb', 'jina', 'honor'"
             )
 
         # Provider-specific validation
@@ -84,6 +95,10 @@ class EmbeddingModelConfig(BaseModel):
         elif self.provider == "jina":
             if not self.api_key:
                 raise ValueError("Jina provider requires 'api_key' to be set")
+
+        self.hmac_signed_headers = [
+            header.strip() for header in self.hmac_signed_headers if header.strip()
+        ] or ["User-Agent"]
 
         return self
 
@@ -130,6 +145,7 @@ class EmbeddingConfig(BaseModel):
             ValueError: If provider/type combination is not supported
         """
         from openviking.models.embedder import (
+            HonorDenseEmbedder,
             JinaDenseEmbedder,
             OpenAIDenseEmbedder,
             VikingDBDenseEmbedder,
@@ -225,6 +241,20 @@ class EmbeddingConfig(BaseModel):
                     "dimension": cfg.dimension,
                 },
             ),
+            ("honor", "dense"): (
+                HonorDenseEmbedder,
+                lambda cfg: {
+                    "model_name": cfg.model,
+                    "api_base": cfg.api_base,
+                    "dimension": cfg.dimension,
+                    "timeout_s": cfg.timeout_s,
+                    "source_file": cfg.source_file,
+                    "source_function": cfg.source_function,
+                    "hmac_access_key": cfg.hmac_access_key,
+                    "hmac_secret_key": cfg.hmac_secret_key,
+                    "hmac_signed_headers": cfg.hmac_signed_headers,
+                },
+            ),
         }
 
         key = (provider, embedder_type)
@@ -247,7 +277,21 @@ class EmbeddingConfig(BaseModel):
         Raises:
             ValueError: If configuration is invalid or unsupported
         """
+        from openviking.models.embedder import CompositeHybridEmbedder
         from openviking.models.embedder.internal_embedder import get_internal_embedder
+
+        if self.hybrid:
+            return self._create_embedder(self.hybrid.provider.lower(), "hybrid", self.hybrid)
+
+        if self.dense and self.sparse:
+            dense_embedder = self._create_embedder(self.dense.provider.lower(), "dense", self.dense)
+            sparse_embedder = self._create_embedder(
+                self.sparse.provider.lower(), "sparse", self.sparse
+            )
+            return CompositeHybridEmbedder(dense_embedder, sparse_embedder)
+
+        if self.dense:
+            return self._create_embedder(self.dense.provider.lower(), "dense", self.dense)
 
         return get_internal_embedder()
 
@@ -260,4 +304,12 @@ class EmbeddingConfig(BaseModel):
         """Helper to get dimension from active config"""
         from openviking.models.embedder.internal_embedder import INTERNAL_EMBEDDING_DIMENSION
 
+        if self.hybrid:
+            return self.hybrid.dimension or 2048
+        if self.dense:
+            if self.dense.dimension:
+                return self.dense.dimension
+            if (self.dense.provider or "").lower() == "honor":
+                return self._create_embedder("honor", "dense", self.dense).get_dimension()
+            return 2048
         return INTERNAL_EMBEDDING_DIMENSION

@@ -83,6 +83,47 @@ class OpenVikingBuildExt(build_ext):
             if target_lib and target_lib.exists():
                 self._copy_artifact(target_lib, build_pkg_dir / "lib" / target_lib.name)
 
+    def _resolve_python_library(self):
+        """Resolve the Windows import library for the active interpreter when available."""
+        version_tag = f"python{sys.version_info.major}{sys.version_info.minor}.lib"
+        candidates = [
+            Path(sys.executable).resolve().parent / "libs" / version_tag,
+            Path(sys.base_prefix).resolve() / "libs" / version_tag,
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        return None
+
+    def _clear_stale_cmake_cache(self, build_dir):
+        """Drop cached CMake state when it points at a different Python interpreter."""
+        cache_path = Path(build_dir) / "CMakeCache.txt"
+        if not cache_path.exists():
+            return
+
+        try:
+            cache_text = cache_path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            print(f"[Warning] Failed to read CMake cache {cache_path}: {exc}")
+            return
+
+        current_python = str(Path(sys.executable).resolve()).replace("\\", "/").lower()
+        cached_python = None
+        for line in cache_text.splitlines():
+            if line.startswith("Python3_EXECUTABLE:FILEPATH=") or line.startswith(
+                "_Python3_EXECUTABLE:INTERNAL="
+            ):
+                cached_python = line.split("=", 1)[1].replace("\\", "/").lower()
+                break
+
+        if cached_python and cached_python != current_python:
+            print(
+                "Detected stale CMake Python cache "
+                f"({cached_python} != {current_python}); removing {build_dir}"
+            )
+            shutil.rmtree(build_dir, ignore_errors=True)
+            Path(build_dir).mkdir(parents=True, exist_ok=True)
+
     def _require_artifact(self, artifact_path, artifact_name, stage_name):
         """Abort the build immediately when a required artifact is missing."""
         if artifact_path.exists():
@@ -411,8 +452,16 @@ class OpenVikingBuildExt(build_ext):
 
     def _build_extension_impl(self, ext_fullpath, ext_dir, build_dir):
         """Invoke CMake to build the Python native extension."""
+        self._clear_stale_cmake_cache(build_dir)
+
         py_output_name = ext_fullpath.stem
         py_output_suffix = ext_fullpath.suffix
+        python_root = Path(sys.executable).resolve().parent
+        python_include = Path(sysconfig.get_path("include")).resolve()
+        python_library = self._resolve_python_library()
+        python_executable = Path(sys.executable).resolve().as_posix()
+        python_root_arg = python_root.as_posix()
+        python_include_arg = python_include.as_posix()
 
         cmake_args = [
             f"-S{Path(ENGINE_SOURCE_DIR).resolve()}",
@@ -423,15 +472,24 @@ class OpenVikingBuildExt(build_ext):
             f"-DPY_OUTPUT_SUFFIX={py_output_suffix}",
             "-DCMAKE_VERBOSE_MAKEFILE=ON",
             "-DCMAKE_INSTALL_RPATH=$ORIGIN",
-            f"-DPython3_EXECUTABLE={sys.executable}",
-            f"-DPython3_INCLUDE_DIRS={sysconfig.get_path('include')}",
-            f"-DPython3_LIBRARIES={sysconfig.get_config_vars().get('LIBRARY')}",
+            f"-DPython3_EXECUTABLE={python_executable}",
+            f"-DPython3_ROOT_DIR={python_root_arg}",
+            f"-DPython_ROOT_DIR={python_root_arg}",
+            "-DPython3_FIND_REGISTRY=NEVER",
+            "-DPython3_FIND_STRATEGY=LOCATION",
+            "-DPython3_FIND_VIRTUALENV=ONLY",
+            f"-DPython3_INCLUDE_DIR={python_include_arg}",
+            f"-DPython3_INCLUDE_DIRS={python_include_arg}",
             f"-Dpybind11_DIR={pybind11.get_cmake_dir()}",
             f"-DCMAKE_C_COMPILER={C_COMPILER_PATH}",
             f"-DCMAKE_CXX_COMPILER={CXX_COMPILER_PATH}",
             f"-DOV_X86_SIMD_LEVEL={os.environ.get('OV_X86_SIMD_LEVEL', 'AVX2')}",
         ]
 
+        if python_library:
+            python_library_arg = python_library.resolve().as_posix()
+            cmake_args.append(f"-DPython3_LIBRARY={python_library_arg}")
+            cmake_args.append(f"-DPython3_LIBRARIES={python_library_arg}")
         if sys.platform == "darwin":
             cmake_args.append("-DCMAKE_OSX_DEPLOYMENT_TARGET=10.15")
             target_arch = os.environ.get("CMAKE_OSX_ARCHITECTURES")
