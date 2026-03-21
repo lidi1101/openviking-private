@@ -35,7 +35,12 @@ def _parse_time(value: Any) -> Dict[str, Any]:
         except Exception:
             pass
         # try sqlite datetime "YYYY-MM-DD HH:MM:SS"
-        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
+        for fmt in (
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d %H:%M:%S.%f",
+            "%Y-%m-%d-%H-%M-%S",
+            "%Y-%m-%d-%H-%M-%S.%f",
+        ):
             try:
                 dt = datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
                 return {"ts": dt.isoformat(), "precision": "second"}

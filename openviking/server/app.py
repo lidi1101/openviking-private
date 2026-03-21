@@ -11,6 +11,9 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from openviking_cli.exceptions import OpenVikingError
+from openviking_cli.utils import get_logger
+
 from openviking.server.api_keys import APIKeyManager
 from openviking.server.config import ServerConfig, load_server_config, validate_server_config
 from openviking.server.dependencies import set_service
@@ -31,13 +34,24 @@ from openviking.server.routers import (
     system_router,
     tasks_router,
 )
-from openviking.server.startup_e2e import run_startup_probe, startup_probe_enabled
 from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
-from openviking_cli.exceptions import OpenVikingError
-from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+try:
+    from openviking.server.startup_e2e import run_startup_probe, startup_probe_enabled
+except ModuleNotFoundError as exc:
+    if exc.name != "openviking.server.startup_e2e":
+        raise
+
+    async def run_startup_probe(config: ServerConfig) -> None:
+        logger.warning(
+            "Optional startup probe module is unavailable; skipping delayed startup probe."
+        )
+
+    def startup_probe_enabled() -> bool:
+        return False
 
 
 def create_app(

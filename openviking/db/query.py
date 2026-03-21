@@ -8,7 +8,7 @@ from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.exceptions import NotFoundError
 
 from .reader import (
-    YOYO_SOURCE_URIS,
+    FIXED_SOURCE_URIS,
     build_localdb_root_uri,
     iter_event_dicts,
     match_event,
@@ -45,7 +45,7 @@ async def list_sources(user_space: str, ctx: RequestContext) -> list[str]:
             continue
         sources.add(name)
 
-    for source_name, uri in YOYO_SOURCE_URIS.items():
+    for source_name, uri in FIXED_SOURCE_URIS.items():
         try:
             content = await viking_fs.read_file(uri, ctx=ctx)
         except (FileNotFoundError, NotFoundError):

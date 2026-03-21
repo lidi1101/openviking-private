@@ -15,16 +15,20 @@ from .sqlite_reader import iter_rows, open_sqlite_readonly
 from .types import IngestItemReport, IngestReport, IngestRequest
 from .writer import append_jsonl_lines
 
+FIXED_SOURCE_OUTPUT_URIS = {
+    "userpreference": "viking://sense/pcevent/default/event.jsonl",
+}
+
 YOYO_TABLE_OUTPUT_URIS = {
     "userinformation": "viking://yoyo/userinformation/default/userinformation.jsonl",
     "usertendencies": "viking://yoyo/usertendencies/default/usertendencies.jsonl",
 }
 
 
-def _normalize_table_name(table: Optional[str]) -> str:
-    if not table:
+def _normalize_name(value: Optional[str]) -> str:
+    if not value:
         return ""
-    return "".join(ch for ch in table if ch.isalnum()).casefold()
+    return "".join(ch for ch in value if ch.isalnum()).casefold()
 
 
 def _resolve_db_path(request: IngestRequest) -> str:
@@ -41,8 +45,12 @@ def _resolve_output_uri(
     raw_output_uri: Optional[str],
     db_path: str,
 ) -> str:
+    mapped_source_uri = FIXED_SOURCE_OUTPUT_URIS.get(_normalize_name(request.source))
+    if mapped_source_uri:
+        return mapped_source_uri
+
     if not raw_output_uri:
-        table_key = _normalize_table_name(table)
+        table_key = _normalize_name(table)
         mapped_uri = YOYO_TABLE_OUTPUT_URIS.get(table_key)
         if mapped_uri:
             return mapped_uri
