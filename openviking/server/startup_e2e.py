@@ -17,6 +17,7 @@ from typing import Any
 import httpx
 import yaml
 
+from openviking.db.reader import parse_event
 from openviking.db.sqlite_reader import open_sqlite_readonly
 from openviking.server.config import ServerConfig
 
@@ -653,6 +654,14 @@ def _parse_jsonl_rows(content: str) -> list[dict[str, Any]]:
     return rows
 
 
+def _event_identity_from_row(row: dict[str, Any], *, case_name: str, source: str) -> tuple[str, str]:
+    try:
+        event = parse_event(row, include_evidence=True)
+    except ValueError as exc:
+        raise RuntimeError(f"[{case_name}] {source} first row is invalid: {exc}") from exc
+    return event.id, event.type
+
+
 def _health_check(*, client: httpx.Client) -> None:
     body = _call_json(client=client, method="GET", path="/health")
     if body.get("status") != "ok":
@@ -806,12 +815,7 @@ def _run_query(
             raise RuntimeError(f"[{case.name}] no jsonl rows found in {uri}")
 
         first = rows[0]
-        first_id = str(first.get("id", ""))
-        first_type = str(first.get("type", ""))
-        if not first_id:
-            raise RuntimeError(f"[{case.name}] {source} first row is missing id")
-        if not first_type:
-            raise RuntimeError(f"[{case.name}] {source} first row is missing type")
+        first_id, first_type = _event_identity_from_row(first, case_name=case.name, source=source)
 
         all_result = _query_localdb(
             client=client,
