@@ -7,11 +7,15 @@ import os
 from typing import Any, Dict, Optional
 
 from openviking.server.identity import RequestContext, Role
+from openviking.pyagfs.exceptions import AGFSClientError
+from openviking.storage.viking_fs import get_viking_fs
+from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 
 from .config import load_mapping_config
 from .normalize import build_event
 from .sqlite_reader import iter_rows, open_sqlite_readonly
+from .summary import summarize_workspace_jsonl_files
 from .types import IngestItemReport, IngestReport, IngestRequest
 from .writer import append_jsonl_lines
 
@@ -22,6 +26,12 @@ FIXED_SOURCE_OUTPUT_URIS = {
 YOYO_TABLE_OUTPUT_URIS = {
     "userinformation": "viking://yoyo/userinformation/default/userinformation.jsonl",
     "usertendencies": "viking://yoyo/usertendencies/default/usertendencies.jsonl",
+}
+
+MINIMAL_EVENT_OUTPUT_URIS = {
+    "viking://sense/pcevent/default/event.jsonl",
+    "viking://yoyo/userinformation/default/userinformation.jsonl",
+    "viking://yoyo/usertendencies/default/usertendencies.jsonl",
 }
 
 
@@ -62,6 +72,18 @@ def _resolve_output_uri(
     )
 
 
+def _trim_event_fields_for_output(event: Dict[str, Any], output_uri: str) -> Dict[str, Any]:
+    if output_uri not in MINIMAL_EVENT_OUTPUT_URIS:
+        return event
+
+    trimmed = dict(event)
+    trimmed.pop("id", None)
+    trimmed.pop("attrs", None)
+    trimmed.pop("entities", None)
+    trimmed.pop("evidence", None)
+    return trimmed
+
+
 async def ingest(request: IngestRequest) -> IngestReport:
     db_path = _resolve_db_path(request)
     if not os.path.exists(db_path):
@@ -85,6 +107,7 @@ async def ingest(request: IngestRequest) -> IngestReport:
     ctx = RequestContext(user=UserIdentifier(account, user, agent), role=Role.ROOT)
 
     try:
+        cleared_output_uris: set[str] = set()
         for item in items:
             item_report = IngestItemReport(id=item.id)
             report.items.append(item_report)
@@ -107,6 +130,23 @@ async def ingest(request: IngestRequest) -> IngestReport:
                     if not report.output_uri:
                         report.output_uri = item_output_uri
 
+                if (
+                    not request.dry_run
+                    and item_output_uri in MINIMAL_EVENT_OUTPUT_URIS
+                    and item_output_uri not in cleared_output_uris
+                ):
+                    try:
+                        vfs = get_viking_fs()
+                        try:
+                            await vfs.stat(item_output_uri, ctx=ctx)
+                        except (FileNotFoundError, NotFoundError, AGFSClientError):
+                            pass
+                        else:
+                            await vfs.rm(item_output_uri, ctx=ctx)
+                    except (FileNotFoundError, NotFoundError, AGFSClientError):
+                        pass
+                    cleared_output_uris.add(item_output_uri)
+
                 pending_events = []
                 for row in iter_rows(conn, item.sql, params=params):
                     item_report.rows += 1
@@ -122,6 +162,7 @@ async def ingest(request: IngestRequest) -> IngestReport:
                         redact=request.redact,
                         db_path=db_path,
                     )
+                    event = _trim_event_fields_for_output(event, item_output_uri)
 
                     if len(report.samples) < 5:
                         report.samples.append(event)
@@ -144,5 +185,13 @@ async def ingest(request: IngestRequest) -> IngestReport:
             conn.close()
         except Exception:
             pass
+
+    if not request.dry_run and report.written > 0:
+        try:
+            summary_result = await summarize_workspace_jsonl_files(ctx)
+            report.summary_output_uris.extend(summary_result.summary_uris)
+            report.summary_errors.extend(summary_result.errors)
+        except Exception as e:
+            report.summary_errors.append(f"localdb summary failed: {e}")
 
     return report

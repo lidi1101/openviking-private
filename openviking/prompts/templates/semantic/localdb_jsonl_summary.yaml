@@ -1,0 +1,63 @@
+metadata:
+  id: "semantic.localdb_jsonl_summary"
+  name: "LocalDB JSONL Summary"
+  description: "Generate a Markdown summary for localdb JSONL event files under yoyo/sense"
+  version: "1.0.0"
+  language: "en"
+  category: "semantic"
+
+variables:
+  - name: "file_name"
+    type: "string"
+    description: "JSONL file name"
+    required: true
+
+  - name: "file_uri"
+    type: "string"
+    description: "JSONL file URI"
+    required: true
+
+  - name: "digest"
+    type: "string"
+    description: "Structured digest extracted from the JSONL file"
+    required: true
+
+template: |
+  You are analyzing a JSONL event file used for user profile and behavior understanding.
+  Write the final answer in Simplified Chinese.
+
+  [File Name]
+  {{ file_name }}
+
+  [File URI]
+  {{ file_uri }}
+
+  [Structured Digest]
+  {{ digest }}
+
+  Requirements:
+  - Output Markdown directly, not wrapped in a full-document code block
+  - Start with `# {{ file_name }}`
+  - Keep the summary concise and factual, about 200-500 Chinese characters
+  - Do not invent facts that are not supported by the digest
+  - Use cautious wording such as "based on the current file" when inferring patterns
+  - If the time range, preferences, behavior patterns, or topic distribution are unclear, say so explicitly
+
+  Use exactly this structure:
+
+  # {{ file_name }}
+
+  ## File Overview
+  Write 2-4 sentences about what this file mainly records, the rough time range, the record volume, and the overall themes.
+
+  ## Key Signals
+  - 3-6 bullets highlighting frequent event types, visible preferences, stable behavior patterns, or important facts
+
+  ## Recent Observations
+  - 2-5 bullets focusing on the most recent records, recent interests, or recent changes
+
+  ## Suggested Uses
+  Write 2-4 sentences explaining how this file can be used next, for example user profiling, preference inference, behavior review, or retrieval augmentation.
+
+llm_config:
+  temperature: 0.0

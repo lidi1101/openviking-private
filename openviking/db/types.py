@@ -42,12 +42,14 @@ class IngestReport:
     db_path: str
     output_uri: str
     output_uris: List[str] = field(default_factory=list)
+    summary_output_uris: List[str] = field(default_factory=list)
     total_rows: int = 0
     written: int = 0
     failed: int = 0
     opened_via_copy: bool = False
     items: List[IngestItemReport] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
+    summary_errors: List[str] = field(default_factory=list)
     samples: List[Dict[str, Any]] = field(default_factory=list)
 
 

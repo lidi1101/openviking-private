@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterator, Optional, Tuple
 
@@ -59,10 +60,15 @@ def iter_event_dicts(content: str) -> Iterator[Tuple[Optional[Dict[str, Any]], O
         yield data, None
 
 
+def _derive_event_id(data: Dict[str, Any]) -> str:
+    canonical = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def parse_event(data: Dict[str, Any], include_evidence: bool = True) -> Event:
     event_id = str(data.get("id", "")).strip()
     if not event_id:
-        raise ValueError("missing event id")
+        event_id = _derive_event_id(data)
 
     event_type = str(data.get("type", "")).strip()
     if not event_type:

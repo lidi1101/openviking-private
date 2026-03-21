@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse, urlunparse
@@ -81,6 +82,11 @@ def build_event(
     time_val = get_col("time")
     url_val = get_col("url")
     title_val = get_col("title")
+    text_fields = {
+        key[len("text_") :]: row.get(col)
+        for key, col in columns.items()
+        if key.startswith("text_") and col
+    }
 
     time_obj = _parse_time(time_val)
 
@@ -91,19 +97,22 @@ def build_event(
     except Exception:
         host = ""
 
-    parts = []
-    if time_obj.get("ts"):
-        parts.append(time_obj["ts"])
-    if event_type:
-        parts.append(event_type)
-    if host:
-        parts.append(host)
-    if title_val:
-        parts.append(str(title_val))
-    if url_norm and not host:
-        parts.append(url_norm)
+    if text_fields:
+        text = json.dumps(text_fields, ensure_ascii=False)
+    else:
+        parts = []
+        if time_obj.get("ts"):
+            parts.append(time_obj["ts"])
+        if event_type:
+            parts.append(event_type)
+        if host:
+            parts.append(host)
+        if title_val:
+            parts.append(str(title_val))
+        if url_norm and not host:
+            parts.append(url_norm)
 
-    text = " ".join([p for p in parts if p])
+        text = " ".join([p for p in parts if p])
 
     row_ref = str(pk) if pk is not None else hashlib.sha256(repr(sorted(row.items())).encode("utf-8")).hexdigest()
     raw_id = f"{source}|{event_type}|{query_id}|{row_ref}"

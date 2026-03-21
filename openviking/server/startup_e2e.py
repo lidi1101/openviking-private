@@ -174,17 +174,88 @@ def _yoyo_generated_extracts(table_names: list[str]) -> list[GeneratedExtract] |
         return None
 
     return [
-        GeneratedExtract(
+        _manual_generated_extract(
             query_id="yoyo_user_information_profile",
             event_type="yoyo_user_information",
             table_name=user_information_table,
             output_uri="viking://yoyo/userinformation/default/userinformation.jsonl",
+            sql="\n".join(
+                [
+                    "SELECT",
+                    '  "id" as pk,',
+                    '  "timestamp" as ts,',
+                    '  CAST("count_id" AS TEXT) as count_id,',
+                    '  CAST("preference_owner" AS TEXT) as preference_owner,',
+                    '  CAST("content" AS TEXT) as content,',
+                    '  CAST("preference_type" AS TEXT) as preference_type,',
+                    '  CAST("preference_sub_type" AS TEXT) as preference_sub_type,',
+                    '  CAST("preference_content" AS TEXT) as preference_content,',
+                    '  \'count_id=\' || COALESCE(trim(CAST("count_id" AS TEXT)), \'\')',
+                    '    || \' | preference_owner=\' || COALESCE(trim(CAST("preference_owner" AS TEXT)), \'\')',
+                    '    || \' | content=\' || COALESCE(trim(CAST("content" AS TEXT)), \'\')',
+                    '    || \' | preference_type=\' || COALESCE(trim(CAST("preference_type" AS TEXT)), \'\')',
+                    '    || \' | preference_sub_type=\' || COALESCE(trim(CAST("preference_sub_type" AS TEXT)), \'\')',
+                    '    || \' | preference_content=\' || COALESCE(trim(CAST("preference_content" AS TEXT)), \'\') as title',
+                    f"FROM {_quote_ident(user_information_table)}",
+                    'ORDER BY "id" DESC',
+                    "LIMIT 200",
+                ]
+            ),
+            columns={
+                "pk": "pk",
+                "time": "ts",
+                "title": "title",
+                "text_count_id": "count_id",
+                "text_preference_owner": "preference_owner",
+                "text_content": "content",
+                "text_preference_type": "preference_type",
+                "text_preference_sub_type": "preference_sub_type",
+                "text_preference_content": "preference_content",
+            },
         ),
-        GeneratedExtract(
+        _manual_generated_extract(
             query_id="yoyo_user_tendencies_preference",
             event_type="yoyo_user_tendency",
             table_name=user_tendencies_table,
             output_uri="viking://yoyo/usertendencies/default/usertendencies.jsonl",
+            sql="\n".join(
+                [
+                    "SELECT",
+                    '  "id" as pk,',
+                    '  "timestamp" as ts,',
+                    '  CAST("count_id" AS TEXT) as count_id,',
+                    '  CAST("preference_owner" AS TEXT) as preference_owner,',
+                    '  CAST("content" AS TEXT) as content,',
+                    '  CAST("preference_type" AS TEXT) as preference_type,',
+                    '  CAST("preference_content" AS TEXT) as preference_content,',
+                    '  CAST("tendency" AS TEXT) as tendency,',
+                    '  \'count_id=\' || COALESCE(trim(CAST("count_id" AS TEXT)), \'\')',
+                    '    || \' | preference_owner=\' || COALESCE(trim(CAST("preference_owner" AS TEXT)), \'\')',
+                    '    || \' | content=\' || COALESCE(trim(CAST("content" AS TEXT)), \'\')',
+                    '    || \' | preference_type=\' || COALESCE(trim(CAST("preference_type" AS TEXT)), \'\')',
+                    '    || \' | preference_content=\' || COALESCE(trim(CAST("preference_content" AS TEXT)), \'\')',
+                    '    || \' | tendency=\' || COALESCE(trim(CAST("tendency" AS TEXT)), \'\') as title',
+                    f"FROM {_quote_ident(user_tendencies_table)}",
+                    "WHERE",
+                    '  COALESCE(trim(CAST("preference_type" AS TEXT)), \'\') <> \'\'',
+                    "  AND lower(trim(CAST(\"preference_type\" AS TEXT))) NOT IN ('none', 'null')",
+                    '  AND COALESCE(trim(CAST("preference_content" AS TEXT)), \'\') <> \'\'',
+                    "  AND lower(trim(CAST(\"preference_content\" AS TEXT))) NOT IN ('none', 'null')",
+                    'ORDER BY "id" DESC',
+                    "LIMIT 200",
+                ]
+            ),
+            columns={
+                "pk": "pk",
+                "time": "ts",
+                "title": "title",
+                "text_count_id": "count_id",
+                "text_preference_owner": "preference_owner",
+                "text_content": "content",
+                "text_preference_type": "preference_type",
+                "text_preference_content": "preference_content",
+                "text_tendency": "tendency",
+            },
         ),
     ]
 
@@ -196,6 +267,7 @@ def _manual_generated_extract(
     table_name: str,
     output_uri: str,
     sql: str,
+    columns: dict[str, str] | None = None,
 ) -> GeneratedExtract:
     return GeneratedExtract(
         query_id=query_id,
@@ -203,7 +275,8 @@ def _manual_generated_extract(
         table_name=table_name,
         output_uri=output_uri,
         sql=sql,
-        columns={
+        columns=columns
+        or {
             "pk": "pk",
             "time": "ts",
             "title": "title",
@@ -212,11 +285,9 @@ def _manual_generated_extract(
 
 
 def _user_preference_generated_extracts(table_names: list[str]) -> list[GeneratedExtract] | None:
-    extracts: list[GeneratedExtract] = []
-
     windows_info_table = _pick_name(["windowsinfodata", "windows_info_data"], table_names)
     if windows_info_table:
-        extracts.append(
+        return [
             _manual_generated_extract(
                 query_id="user_preference_windows_info",
                 event_type="user_preference_event",
@@ -227,6 +298,9 @@ def _user_preference_generated_extracts(table_names: list[str]) -> list[Generate
                         "SELECT",
                         '  "WindowsInfoDataID" as pk,',
                         '  "CreatTime" as ts,',
+                        '  CAST("APIType" AS TEXT) as api_type,',
+                        '  CAST("Name" AS TEXT) as name,',
+                        '  CAST("Data" AS TEXT) as data,',
                         "  CASE",
                         '    WHEN COALESCE("Name", \'\') <> \'\' AND COALESCE("Data", \'\') <> \'\'',
                         '      THEN CAST("Name" AS TEXT) || \': \' || CAST("Data" AS TEXT)',
@@ -235,62 +309,38 @@ def _user_preference_generated_extracts(table_names: list[str]) -> list[Generate
                         '    ELSE CAST("Data" AS TEXT)',
                         "  END as title",
                         f"FROM {_quote_ident(windows_info_table)}",
+                        "WHERE lower(",
+                        '  replace(replace(replace(CAST("APIType" AS TEXT), \'_\', \'\'), \' \', \'\'), \'-\', \'\')',
+                        ") IN (",
+                        "  '\u7535\u6c60',",
+                        "  'battery',",
+                        "  'batterystatus',",
+                        "  '\u84dd\u7259\u8fde\u63a5\u72b6\u6001',",
+                        "  'bluetoothconnectionstatus',",
+                        "  'bluetoothstatus',",
+                        "  'wifi\u7f51\u7edc\u72b6\u6001',",
+                        "  'wifinetworkstatus',",
+                        "  'wifistatus',",
+                        "  '\u5de5\u4f5c\u72b6\u6001',",
+                        "  'workstatus',",
+                        "  'workingstatus'",
+                        ")",
                         'ORDER BY "WindowsInfoDataID" DESC',
                         "LIMIT 200",
                     ]
                 ),
+                columns={
+                    "pk": "pk",
+                    "time": "ts",
+                    "title": "title",
+                    "text_api_type": "api_type",
+                    "text_name": "name",
+                    "text_data": "data",
+                },
             )
-        )
+        ]
 
-    browser_data_table = _pick_name(["browserdata", "browser_data"], table_names)
-    if browser_data_table:
-        extracts.append(
-            _manual_generated_extract(
-                query_id="user_preference_browser_data",
-                event_type="user_preference_event",
-                table_name=browser_data_table,
-                output_uri=USER_PREFERENCE_OUTPUT_URI,
-                sql="\n".join(
-                    [
-                        "SELECT",
-                        '  "BrowserDataID" as pk,',
-                        "  NULL as ts,",
-                        "  CASE",
-                        '    WHEN COALESCE("processName", \'\') <> \'\' AND COALESCE("currentTitle", \'\') <> \'\'',
-                        '      THEN CAST("processName" AS TEXT) || \': \' || CAST("currentTitle" AS TEXT)',
-                        '    WHEN COALESCE("currentTitle", \'\') <> \'\'',
-                        '      THEN CAST("currentTitle" AS TEXT)',
-                        '    ELSE CAST("processName" AS TEXT)',
-                        "  END as title",
-                        f"FROM {_quote_ident(browser_data_table)}",
-                        'ORDER BY "BrowserDataID" DESC',
-                        "LIMIT 200",
-                    ]
-                ),
-            )
-        )
-
-    if extracts:
-        return extracts
-
-    table_name = _pick_name(
-        ["user_preference", "userpreferences", "preferences", "preference"],
-        table_names,
-    )
-    if not table_name:
-        candidates = [name for name in table_names if not name.startswith("sqlite_")]
-        if not candidates:
-            return None
-        table_name = candidates[0]
-
-    return [
-        GeneratedExtract(
-            query_id="user_preference_events",
-            event_type="user_preference_event",
-            table_name=table_name,
-            output_uri=USER_PREFERENCE_OUTPUT_URI,
-        )
-    ]
+    return None
 
 
 def _build_generated_extract_specs(case: ProfileCase, table_names: list[str]) -> list[GeneratedExtract] | None:
@@ -668,7 +718,11 @@ def _run_ingest(
             f"[{case.name}] ingest db_path mismatch: expected {case.db_path}, actual {result.get('db_path')}"
         )
     if int(result.get("failed", 0)) != 0:
-        raise RuntimeError(f"[{case.name}] ingest reported failures: {result.get('failed')}")
+        errors = result.get("errors") or []
+        error_suffix = f" errors={errors}" if errors else ""
+        raise RuntimeError(
+            f"[{case.name}] ingest reported failures: {result.get('failed')}{error_suffix}"
+        )
     return result
 
 
