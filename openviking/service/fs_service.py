@@ -99,10 +99,10 @@ class FSService:
             )
         return entries
 
-    async def mkdir(self, uri: str, ctx: RequestContext) -> None:
+    async def mkdir(self, uri: str, ctx: RequestContext, exist_ok: bool = False) -> None:
         """Create directory."""
         viking_fs = self._ensure_initialized()
-        await viking_fs.mkdir(uri, ctx=ctx)
+        await viking_fs.mkdir(uri, ctx=ctx, exist_ok=exist_ok)
 
     async def rm(self, uri: str, ctx: RequestContext, recursive: bool = False) -> None:
         """Remove resource."""

@@ -140,6 +140,17 @@ function Write-PackagingSummary {
 function Get-PythonCommand {
     $candidates = @()
 
+    if ($env:OV_PYTHON_CMD) {
+        $candidates += $env:OV_PYTHON_CMD
+    }
+
+    if ($env:CONDA_PREFIX) {
+        $condaPython = Join-Path $env:CONDA_PREFIX "python.exe"
+        if (Test-Path $condaPython) {
+            $candidates += $condaPython
+        }
+    }
+
     $localPythonRoot = Join-Path $env:LOCALAPPDATA "Python"
     if (Test-Path $localPythonRoot) {
         $candidates += Get-ChildItem -Path $localPythonRoot -Directory -Filter "pythoncore-*" |
@@ -152,6 +163,8 @@ function Get-PythonCommand {
         "py -3",
         "py"
     )
+
+    $candidates = $candidates | Where-Object { $_ } | Select-Object -Unique
 
     foreach ($candidate in $candidates) {
         try {
@@ -199,6 +212,25 @@ function Get-PythonVersionString {
     return (& $PythonCmd "-c" "import platform; print(platform.python_version())")
 }
 
+function Get-ExpectedVectorDbEngineArtifactPath {
+    param(
+        [string]$PythonCmd
+    )
+
+    $extSuffix = if ($PythonCmd -like "* *") {
+        & $env:ComSpec /c $PythonCmd "-c" "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX') or '')"
+    } else {
+        & $PythonCmd "-c" "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX') or '')"
+    }
+
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($extSuffix)) {
+        throw "Failed to resolve Python extension suffix for $PythonCmd"
+    }
+
+    $engineFileName = "engine$($extSuffix.Trim())"
+    return Join-Path $projectRoot "openviking\storage\vectordb\$engineFileName"
+}
+
 function Get-MissingArtifacts {
     return $requiredArtifacts | Where-Object { -not (Test-Path $_) }
 }
@@ -234,6 +266,7 @@ function Assert-RuntimePythonDependencies {
         @{ Name = "uvicorn"; Hint = "uvicorn (install with: pip install uvicorn)" },
         @{ Name = "multipart"; Hint = "python-multipart (install with: pip install python-multipart)" },
         @{ Name = "httpx"; Hint = "httpx (install with: pip install httpx)" },
+        @{ Name = "json_repair"; Hint = "json-repair (install with: pip install json-repair)" },
         @{ Name = "pydantic"; Hint = "pydantic (install with: pip install pydantic)" }
     )) {
         try {
@@ -696,6 +729,7 @@ try {
     $pythonCmd = Get-PythonCommand
     Write-Host "Using Python: $pythonCmd"
     $pythonVersion = Get-PythonVersionString -PythonCmd $pythonCmd
+    $requiredArtifacts += Get-ExpectedVectorDbEngineArtifactPath -PythonCmd $pythonCmd
     Write-Host "Python version: $pythonVersion"
     Write-Host "Build mode: $Mode"
     if ([version]$pythonVersion -ge [version]"3.14.0") {

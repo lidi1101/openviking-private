@@ -226,6 +226,28 @@ class OpenVikingBuildExt(build_ext):
             f"{stage_name} did not produce required {artifact_name} at {artifact_path}"
         )
 
+    def _finalize_extension_artifact(self, ext_fullpath, build_dir):
+        """Copy fallback CMake output into setuptools' expected extension path."""
+        if ext_fullpath.exists():
+            return
+
+        fallback_candidates = [
+            Path(build_dir) / ext_fullpath.name,
+            Path(build_dir) / f"{ext_fullpath.stem}.pyd",
+            Path(build_dir) / "Release" / ext_fullpath.name,
+            Path(build_dir) / "Release" / f"{ext_fullpath.stem}.pyd",
+            Path(build_dir) / "Debug" / ext_fullpath.name,
+            Path(build_dir) / "Debug" / f"{ext_fullpath.stem}.pyd",
+        ]
+
+        for candidate in fallback_candidates:
+            if not candidate.exists():
+                continue
+            ext_fullpath.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(candidate, ext_fullpath)
+            print(f"Copied fallback extension artifact from {candidate} to {ext_fullpath}")
+            return
+
     def _run_stage_with_artifact_checks(
         self, stage_name, build_fn, required_artifacts, on_success=None
     ):
@@ -542,6 +564,7 @@ class OpenVikingBuildExt(build_ext):
             "CMake build",
             lambda: self._build_extension_impl(ext_fullpath, ext_dir, build_dir),
             [(ext_fullpath, f"native extension '{ext.name}'")],
+            on_success=None,
         )
 
     def _build_extension_impl(self, ext_fullpath, ext_dir, build_dir):
@@ -584,6 +607,7 @@ class OpenVikingBuildExt(build_ext):
             python_library_arg = python_library.resolve().as_posix()
             cmake_args.append(f"-DPython3_LIBRARY={python_library_arg}")
             cmake_args.append(f"-DPython3_LIBRARIES={python_library_arg}")
+            cmake_args.append(f"-DPython3_LIBRARY_RELEASE={python_library_arg}")
         if sys.platform == "darwin":
             cmake_args.append("-DCMAKE_OSX_DEPLOYMENT_TARGET=10.15")
             target_arch = os.environ.get("CMAKE_OSX_ARCHITECTURES")
@@ -599,6 +623,7 @@ class OpenVikingBuildExt(build_ext):
 
         build_args = ["--build", str(build_dir), "--config", "Release", f"-j{os.cpu_count() or 4}"]
         self.spawn([self.cmake_executable] + build_args)
+        self._finalize_extension_artifact(ext_fullpath, build_dir)
 
 
 setup(

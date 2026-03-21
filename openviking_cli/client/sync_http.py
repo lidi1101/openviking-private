@@ -286,9 +286,9 @@ class SyncHTTPClient:
         """Get resource status."""
         return run_async(self._async_client.stat(uri))
 
-    def mkdir(self, uri: str) -> None:
+    def mkdir(self, uri: str, exist_ok: bool = True) -> None:
         """Create directory."""
-        run_async(self._async_client.mkdir(uri))
+        run_async(self._async_client.mkdir(uri, exist_ok=exist_ok))
 
     def rm(self, uri: str, recursive: bool = False) -> None:
         """Remove resource."""

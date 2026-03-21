@@ -110,6 +110,12 @@ class MemoryExtractor:
         MemoryCategory.PATTERNS,
     }
 
+    _EXPLICIT_PREFERENCE_PATTERNS = (
+        re.compile(r"^我(?P<neg>不)?喜欢(?P<body>.+)$"),
+        re.compile(r"^我(?P<neg>不)?爱吃(?P<body>.+)$"),
+        re.compile(r"^我(?P<neg>不)?爱喝(?P<body>.+)$"),
+    )
+
     def __init__(self):
         """Initialize memory extractor."""
 
@@ -226,6 +232,188 @@ class MemoryExtractor:
                         stats_map[name]["success_time"] += 1
         return stats_map
 
+    def _get_message_text(self, msg) -> str:
+        """Return the user-facing text content for a message."""
+        content = str(getattr(msg, "content", "") or "").strip()
+        if content:
+            return content
+        return self._format_message_with_parts(msg).strip()
+
+    def _build_explicit_preference_candidate(
+        self,
+        statement: str,
+        user: UserIdentifier,
+        session_id: str,
+        output_language: str,
+    ) -> Optional[CandidateMemory]:
+        """Build a narrow preference candidate from an explicit first-person statement."""
+        text = (statement or "").strip()
+        if not text:
+            return None
+
+        for pattern in self._EXPLICIT_PREFERENCE_PATTERNS:
+            match = pattern.match(text)
+            if not match:
+                continue
+
+            body = (match.group("body") or "").strip().strip("。！？!?，,；;：:~～ ")
+            if not body:
+                return None
+
+            if body.startswith(("吗", "么", "呢")):
+                return None
+
+            neg = bool(match.group("neg"))
+            preference_phrase = f"{'不喜欢' if neg else '喜欢'}{body}"
+
+            if body.startswith(("吃", "喝")):
+                topic = "饮食偏好"
+            elif body.startswith(("用", "写", "看")):
+                topic = "使用偏好"
+            else:
+                topic = "一般偏好"
+
+            return CandidateMemory(
+                category=MemoryCategory.PREFERENCES,
+                abstract=f"{topic}: {preference_phrase}",
+                overview=(
+                    "## Preference Domain\n"
+                    f"- **Topic**: {topic}\n"
+                    "## Specific Preferences\n"
+                    f"- 用户明确表示{preference_phrase}"
+                ),
+                content=(
+                    f'用户在对话中明确表示“{text}”。'
+                    f"这说明用户{preference_phrase}，属于可长期参考的{topic}信息。"
+                ),
+                source_session=session_id,
+                user=user,
+                language=output_language,
+            )
+
+        return None
+
+    def _extract_explicit_preference_candidates(
+        self,
+        messages: List,
+        user: UserIdentifier,
+        session_id: str,
+        output_language: str,
+    ) -> List[CandidateMemory]:
+        """Extract obvious preference statements as a fallback when LLM returns none."""
+        candidates = []
+        seen_abstracts = set()
+
+        for msg in messages:
+            if getattr(msg, "role", "") != "user":
+                continue
+
+            text = self._get_message_text(msg)
+            candidate = self._build_explicit_preference_candidate(
+                text,
+                user=user,
+                session_id=session_id,
+                output_language=output_language,
+            )
+            if not candidate or candidate.abstract in seen_abstracts:
+                continue
+
+            seen_abstracts.add(candidate.abstract)
+            candidates.append(candidate)
+
+        return candidates
+
+    @staticmethod
+    def _contains_cjk(text: str) -> bool:
+        """Return True when text contains CJK characters."""
+        return bool(re.search(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]", text or ""))
+
+    @staticmethod
+    def _extract_preference_phrase(candidate: CandidateMemory) -> str:
+        """Extract a compact preference phrase for duplicate detection."""
+        abstract = (candidate.abstract or "").strip()
+        if ":" in abstract:
+            return abstract.split(":", 1)[1].strip()
+        return abstract
+
+    def _matches_existing_preference(
+        self,
+        existing: CandidateMemory,
+        rule_candidate: CandidateMemory,
+    ) -> bool:
+        """Return True when two preference candidates describe the same user preference."""
+        if existing.category != MemoryCategory.PREFERENCES:
+            return False
+
+        rule_phrase = self._extract_preference_phrase(rule_candidate)
+        existing_text = "\n".join(
+            [
+                existing.abstract or "",
+                existing.overview or "",
+                existing.content or "",
+            ]
+        )
+        if rule_phrase and rule_phrase in existing_text:
+            return True
+
+        return (
+            existing.abstract == rule_candidate.abstract
+            or existing.content == rule_candidate.content
+        )
+
+    def _prefer_rule_candidates_for_zh_preferences(
+        self,
+        candidates: List[CandidateMemory],
+        rule_candidates: List[CandidateMemory],
+        output_language: str,
+    ) -> List[CandidateMemory]:
+        """Prefer explicit rule-derived Chinese preference candidates over English LLM ones."""
+        if not output_language.lower().startswith("zh") or not rule_candidates:
+            return candidates
+
+        preferred_rules = [
+            candidate
+            for candidate in rule_candidates
+            if candidate.category == MemoryCategory.PREFERENCES
+        ]
+        if not preferred_rules:
+            return candidates
+
+        merged = list(candidates)
+        used_indexes = set()
+
+        for rule_candidate in preferred_rules:
+            replacement_index = None
+            for idx, candidate in enumerate(merged):
+                if idx in used_indexes or candidate.category != MemoryCategory.PREFERENCES:
+                    continue
+
+                combined_text = "\n".join(
+                    [
+                        candidate.abstract or "",
+                        candidate.overview or "",
+                        candidate.content or "",
+                    ]
+                )
+                if self._contains_cjk(combined_text):
+                    continue
+
+                replacement_index = idx
+                break
+
+            if replacement_index is not None:
+                merged[replacement_index] = rule_candidate
+                used_indexes.add(replacement_index)
+                continue
+
+            if not any(
+                self._matches_existing_preference(existing, rule_candidate)
+                for existing in merged
+            ):
+                merged.append(rule_candidate)
+
+        return merged
+
     async def extract(
         self,
         context: dict,
@@ -234,12 +422,23 @@ class MemoryExtractor:
     ) -> List[CandidateMemory]:
         """Extract memory candidates from messages."""
         user = user
-        vlm = get_openviking_config().vlm
+        config = get_openviking_config()
+        messages = context["messages"]
+        fallback_language = (config.language_fallback or "en").strip() or "en"
+        output_language = self._detect_output_language(
+            messages, fallback_language=fallback_language
+        )
+        rule_candidates = self._extract_explicit_preference_candidates(
+            messages,
+            user=user,
+            session_id=session_id,
+            output_language=output_language,
+        )
+
+        vlm = config.vlm
         if not vlm or not vlm.is_available():
             logger.warning("LLM not available, skipping memory extraction")
-            return []
-
-        messages = context["messages"]
+            return rule_candidates
 
         tool_stats_map = self._collect_tool_stats_from_messages(messages)
 
@@ -255,13 +454,7 @@ class MemoryExtractor:
 
         if not formatted_messages:
             logger.warning("No formatted messages, returning empty list")
-            return []
-
-        config = get_openviking_config()
-        fallback_language = (config.language_fallback or "en").strip() or "en"
-        output_language = self._detect_output_language(
-            messages, fallback_language=fallback_language
-        )
+            return rule_candidates
 
         prompt = render_prompt(
             "compression.memory_extraction",
@@ -338,11 +531,21 @@ class MemoryExtractor:
             logger.info(
                 f"Extracted {len(candidates)} candidate memories (language={output_language})"
             )
-            return candidates
+            if not candidates and rule_candidates:
+                logger.info(
+                    "Memory extraction returned no candidates; using %d explicit preference fallback candidate(s)",
+                    len(rule_candidates),
+                )
+                return rule_candidates
+            return self._prefer_rule_candidates_for_zh_preferences(
+                candidates,
+                rule_candidates,
+                output_language,
+            )
 
         except Exception as e:
             logger.error(f"Memory extraction failed: {e}")
-            return []
+            return rule_candidates
 
     async def create_memory(
         self,

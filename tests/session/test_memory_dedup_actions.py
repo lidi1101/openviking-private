@@ -317,6 +317,142 @@ class TestMemoryMergeBundle:
 
 
 @pytest.mark.asyncio
+class TestMemoryExtractorFallback:
+    async def test_extract_uses_explicit_preference_fallback_when_llm_returns_empty(self):
+        extractor = MemoryExtractor()
+
+        class _DummyVLM:
+            def is_available(self):
+                return True
+
+            async def get_completion_async(self, _prompt):
+                return '{"memories":[]}'
+
+        class _DummyConfig:
+            vlm = _DummyVLM()
+            language_fallback = "en"
+
+        with (
+            patch(
+                "openviking.session.memory_extractor.get_openviking_config",
+                return_value=_DummyConfig(),
+            ),
+            patch("openviking.session.memory_extractor.render_prompt", return_value="prompt"),
+        ):
+            candidates = await extractor.extract(
+                {"messages": [Message.create_user("我喜欢吃西瓜")]},
+                user=_make_user(),
+                session_id="session_test",
+            )
+
+        assert len(candidates) == 1
+        assert candidates[0].category == MemoryCategory.PREFERENCES
+        assert "西瓜" in candidates[0].abstract
+        assert "我喜欢吃西瓜" in candidates[0].content
+        assert candidates[0].language == "zh-CN"
+
+    async def test_extract_prefers_chinese_rule_candidate_over_english_preference(self):
+        extractor = MemoryExtractor()
+
+        class _DummyVLM:
+            def is_available(self):
+                return True
+
+            async def get_completion_async(self, _prompt):
+                return (
+                    '{"memories":[{"category":"preferences",'
+                    '"abstract":"Food preference: likes bananas",'
+                    '"overview":"User likes bananas.",'
+                    '"content":"User mentioned they like eating bananas."}]}'
+                )
+
+        class _DummyConfig:
+            vlm = _DummyVLM()
+            language_fallback = "en"
+
+        with (
+            patch(
+                "openviking.session.memory_extractor.get_openviking_config",
+                return_value=_DummyConfig(),
+            ),
+            patch("openviking.session.memory_extractor.render_prompt", return_value="prompt"),
+        ):
+            candidates = await extractor.extract(
+                {"messages": [Message.create_user("我喜欢吃香蕉")]},
+                user=_make_user(),
+                session_id="session_test",
+            )
+
+        assert len(candidates) == 1
+        assert candidates[0].category == MemoryCategory.PREFERENCES
+        assert candidates[0].language == "zh-CN"
+        assert "香蕉" in candidates[0].abstract
+        assert "我喜欢吃香蕉" in candidates[0].content
+        assert "bananas" not in candidates[0].content
+
+    async def test_extract_does_not_duplicate_same_chinese_preference(self):
+        extractor = MemoryExtractor()
+
+        class _DummyVLM:
+            def is_available(self):
+                return True
+
+            async def get_completion_async(self, _prompt):
+                return (
+                    '{"memories":[{"category":"preferences",'
+                    '"abstract":"饮食偏好: 不喜欢吃苹果",'
+                    '"overview":"## 偏好\\n- 用户不喜欢吃苹果",'
+                    '"content":"用户明确表示不喜欢吃苹果。这是一个明确的食物偏好。"}]}'
+                )
+
+        class _DummyConfig:
+            vlm = _DummyVLM()
+            language_fallback = "en"
+
+        with (
+            patch(
+                "openviking.session.memory_extractor.get_openviking_config",
+                return_value=_DummyConfig(),
+            ),
+            patch("openviking.session.memory_extractor.render_prompt", return_value="prompt"),
+        ):
+            candidates = await extractor.extract(
+                {"messages": [Message.create_user("我不喜欢吃苹果")]},
+                user=_make_user(),
+                session_id="session_test",
+            )
+
+        assert len(candidates) == 1
+        assert candidates[0].category == MemoryCategory.PREFERENCES
+        assert "苹果" in candidates[0].content
+
+    async def test_extract_uses_explicit_preference_fallback_when_llm_is_unavailable(self):
+        extractor = MemoryExtractor()
+
+        class _DummyVLM:
+            def is_available(self):
+                return False
+
+        class _DummyConfig:
+            vlm = _DummyVLM()
+            language_fallback = "en"
+
+        with patch(
+            "openviking.session.memory_extractor.get_openviking_config",
+            return_value=_DummyConfig(),
+        ):
+            candidates = await extractor.extract(
+                {"messages": [Message.create_user("我喜欢吃西瓜")]},
+                user=_make_user(),
+                session_id="session_test",
+            )
+
+        assert len(candidates) == 1
+        assert candidates[0].category == MemoryCategory.PREFERENCES
+        assert "西瓜" in candidates[0].abstract
+
+
+@pytest.mark.asyncio
 class TestProfileMergeSafety:
     async def test_profile_merge_failure_keeps_existing_content(self):
         extractor = MemoryExtractor()

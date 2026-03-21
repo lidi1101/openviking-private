@@ -12,6 +12,11 @@ INTERNAL_EMBEDDING_MODEL = "honor-embedding"
 INTERNAL_SOURCE_FUNCTION = "send_emb_request"
 
 
+def _auto_probe_internal_embedding_sources_enabled() -> bool:
+    raw = os.environ.get("OPENVIKING_AUTO_DISCOVER_HONOR_SOURCE_FILE", "")
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _candidate_internal_embedding_source_files() -> list[Path]:
     candidates: list[Path] = []
     seen: set[Path] = set()
@@ -28,6 +33,9 @@ def _candidate_internal_embedding_source_files() -> list[Path]:
     env_source_file = os.environ.get("HONOR_EMBED_SOURCE_FILE")
     if env_source_file:
         add_candidate(Path(env_source_file))
+
+    if not _auto_probe_internal_embedding_sources_enabled():
+        return candidates
 
     meipass_root = getattr(sys, "_MEIPASS", None)
     if meipass_root:

@@ -101,7 +101,7 @@ class BaseClient(ABC):
         ...
 
     @abstractmethod
-    async def mkdir(self, uri: str) -> None:
+    async def mkdir(self, uri: str, exist_ok: bool = True) -> None:
         """Create directory."""
         ...
 

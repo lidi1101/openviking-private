@@ -226,9 +226,9 @@ class SyncOpenViking:
         """Get resource status"""
         return run_async(self._async_client.stat(uri))
 
-    def mkdir(self, uri: str) -> None:
+    def mkdir(self, uri: str, exist_ok: bool = True) -> None:
         """Create directory"""
-        return run_async(self._async_client.mkdir(uri))
+        return run_async(self._async_client.mkdir(uri, exist_ok=exist_ok))
 
     def get_status(self):
         """Get system status.

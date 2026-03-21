@@ -131,7 +131,10 @@ class OpenVikingConfig(BaseModel):
         # Remove sections managed by other loaders (e.g. server config)
         config_copy.pop("server", None)
         config_copy.pop("bot", None)
-        config_copy.pop("embedding", None)
+
+        embedding_config_data = None
+        if "embedding" in config_copy:
+            embedding_config_data = config_copy.pop("embedding")
 
         # Handle parser configurations from nested "parsers" section
         parser_configs = {}
@@ -150,6 +153,9 @@ class OpenVikingConfig(BaseModel):
         # Apply log configuration
         if log_config_data is not None:
             instance.log = LogConfig.from_dict(log_config_data)
+
+        if embedding_config_data is not None:
+            instance.embedding = EmbeddingConfig(**embedding_config_data)
 
         # Apply parser configurations
         for parser_type, parser_data in parser_configs.items():

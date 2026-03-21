@@ -480,12 +480,12 @@ class AsyncHTTPClient(BaseClient):
         )
         return self._handle_response(response)
 
-    async def mkdir(self, uri: str) -> None:
+    async def mkdir(self, uri: str, exist_ok: bool = True) -> None:
         """Create directory."""
         uri = VikingURI.normalize(uri)
         response = await self._http.post(
             "/api/v1/fs/mkdir",
-            json={"uri": uri},
+            json={"uri": uri, "exist_ok": exist_ok},
         )
         self._handle_response(response)
 

@@ -7,6 +7,7 @@ import sys
 
 from openviking_cli.utils.config.agfs_config import AGFSConfig, S3Config
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
@@ -155,6 +156,29 @@ def test_embedding_validation():
         print("   Pass (provider='volcengine' priority over backend='openai')")
     else:
         print(f"   Fail (provider='volcengine' should have priority, got '{config_b.provider}')")
+
+
+def test_openviking_config_preserves_embedding_section():
+    config = OpenVikingConfig.from_dict(
+        {
+            "embedding": {
+                "dense": {
+                    "provider": "honor",
+                    "model": "honor-embedding",
+                    "api_base": "https://example.com/embedding",
+                    "dimension": 768,
+                    "hmac_access_key": "test-ak",
+                    "hmac_secret_key": "test-sk",
+                    "hmac_signed_headers": ["User-Agent"],
+                }
+            }
+        }
+    )
+
+    assert config.embedding.dense is not None
+    assert config.embedding.dense.provider == "honor"
+    assert config.embedding.dense.model == "honor-embedding"
+    assert config.embedding.dimension == 768
 
 
 def test_vlm_validation():

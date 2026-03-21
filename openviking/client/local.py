@@ -155,9 +155,9 @@ class LocalClient(BaseClient):
         """Get resource status."""
         return await self._service.fs.stat(uri, ctx=self._ctx)
 
-    async def mkdir(self, uri: str) -> None:
+    async def mkdir(self, uri: str, exist_ok: bool = True) -> None:
         """Create directory."""
-        await self._service.fs.mkdir(uri, ctx=self._ctx)
+        await self._service.fs.mkdir(uri, ctx=self._ctx, exist_ok=exist_ok)
 
     async def rm(self, uri: str, recursive: bool = False) -> None:
         """Remove resource."""

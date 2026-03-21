@@ -7,8 +7,6 @@ $envPrefix = if ($env:OPENVIKING_ENV_PREFIX) { $env:OPENVIKING_ENV_PREFIX } else
 $pythonExe = Join-Path $envPrefix "python.exe"
 $defaultConfig = Join-Path $HOME ".openviking\ov.conf"
 $defaultCliConfig = Join-Path $HOME ".openviking\ovcli.conf"
-$defaultSourceFile = Join-Path $HOME "Downloads\emb_requests.py"
-$repoSourceFile = Join-Path $repoRoot "emb_requests.py"
 
 if (-not (Test-Path $pythonExe)) {
     throw "Python executable not found: $pythonExe"
@@ -27,10 +25,15 @@ $env:OPENVIKING_CLI_CONFIG_FILE = if ($env:OPENVIKING_CLI_CONFIG_FILE) {
 }
 
 if (-not $env:HONOR_EMBED_SOURCE_FILE) {
-    if (Test-Path $defaultSourceFile) {
-        $env:HONOR_EMBED_SOURCE_FILE = $defaultSourceFile
-    } elseif (Test-Path $repoSourceFile) {
-        $env:HONOR_EMBED_SOURCE_FILE = $repoSourceFile
+    $autoEnableHonorSource = "$($env:OPENVIKING_AUTO_SET_HONOR_SOURCE_FILE)".Trim().ToLowerInvariant()
+    if ($autoEnableHonorSource -in @("1", "true", "yes", "on")) {
+        $defaultSourceFile = Join-Path $HOME "Downloads\emb_requests.py"
+        $repoSourceFile = Join-Path $repoRoot "emb_requests.py"
+        if (Test-Path $defaultSourceFile) {
+            $env:HONOR_EMBED_SOURCE_FILE = $defaultSourceFile
+        } elseif (Test-Path $repoSourceFile) {
+            $env:HONOR_EMBED_SOURCE_FILE = $repoSourceFile
+        }
     }
 }
 
@@ -134,6 +137,8 @@ Write-Host "Server config: $env:OPENVIKING_CONFIG_FILE"
 Write-Host "CLI config: $env:OPENVIKING_CLI_CONFIG_FILE"
 if ($env:HONOR_EMBED_SOURCE_FILE) {
     Write-Host "Honor embedding source: $env:HONOR_EMBED_SOURCE_FILE"
+} else {
+    Write-Host "Honor embedding source: disabled by default; set HONOR_EMBED_SOURCE_FILE or OPENVIKING_AUTO_SET_HONOR_SOURCE_FILE=1 to enable source-file mode"
 }
 
 & $pythonExe -m openviking_cli.server_bootstrap @args

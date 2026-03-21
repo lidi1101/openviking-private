@@ -45,10 +45,12 @@ except ModuleNotFoundError as exc:
     if exc.name != "openviking.server.startup_e2e":
         raise
 
+    logger.warning(
+        "openviking.server.startup_e2e is unavailable; startup ingest/query probe is disabled."
+    )
+
     async def run_startup_probe(config: ServerConfig) -> None:
-        logger.warning(
-            "Optional startup probe module is unavailable; skipping delayed startup probe."
-        )
+        return None
 
     def startup_probe_enabled() -> bool:
         return False
