@@ -38,6 +38,11 @@ template: |
 
   Target Output Language: {{ output_language }} ("auto" means detect from recent messages)
 
+  ## CRITICAL LANGUAGE REQUIREMENT
+  - If user messages contain Chinese characters (中文), ALL memory fields MUST be in Chinese (简体中文).
+  - When user communicates in Chinese, NEVER output English memories - always use Chinese.
+  - Only use English when user messages are clearly and entirely in English.
+
   {% if summary %}
   ## Session History Summary
   {{ summary }}

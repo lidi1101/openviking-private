@@ -111,10 +111,10 @@ class OpenVikingConfig(BaseModel):
     )
 
     language_fallback: str = Field(
-        default="en",
+        default="zh-CN",
         description=(
             "Fallback language used by memory extraction when dominant user language "
-            "cannot be confidently detected"
+            "cannot be confidently detected. Defaults to Chinese for better CJK user experience."
         ),
     )
 
