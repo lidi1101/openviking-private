@@ -139,7 +139,10 @@ async def _generate_summary_markdown(file_uri: str, content: str) -> str:
     file_name = file_uri.rsplit("/", 1)[-1]
     digest = _build_jsonl_digest(content)
 
+    logger.info("[LocalDbSummary] VLM available: %s for file: %s", vlm.is_available(), file_name)
+
     if not vlm.is_available():
+        logger.warning("[LocalDbSummary] VLM is not available, using fallback summary for: %s", file_uri)
         return "\n".join(
             [
                 f"# {file_name}",
@@ -188,7 +191,10 @@ async def summarize_workspace_jsonl_files(
 
     jsonl_uris: List[str] = []
     for root_uri in root_uris:
-        jsonl_uris.extend(await _list_jsonl_files(root_uri, ctx))
+        logger.info("[LocalDbSummary] Scanning root_uri: %s", root_uri)
+        uris = await _list_jsonl_files(root_uri, ctx)
+        logger.info("[LocalDbSummary] Found %d jsonl files in %s", len(uris), root_uri)
+        jsonl_uris.extend(uris)
 
     # Preserve order while deduplicating across overlapping roots.
     seen = set()
@@ -208,14 +214,18 @@ async def summarize_workspace_jsonl_files(
     async def summarize_one(jsonl_uri: str) -> None:
         async with semaphore:
             try:
+                logger.info("[LocalDbSummary] Generating summary for: %s", jsonl_uri)
                 content = await viking_fs.read_file(jsonl_uri, ctx=ctx)
                 summary_md = await _generate_summary_markdown(jsonl_uri, content)
                 summary_uri = _summary_uri_for_jsonl(jsonl_uri)
                 await viking_fs.write_file(summary_uri, summary_md, ctx=ctx)
                 result.summary_uris.append(summary_uri)
+                logger.info("[LocalDbSummary] Summary written to: %s", summary_uri)
             except Exception as exc:
                 logger.warning("Failed to summarize localdb jsonl %s: %s", jsonl_uri, exc)
                 result.errors.append(f"{jsonl_uri}: {exc}")
 
     await asyncio.gather(*(summarize_one(uri) for uri in ordered_jsonl_uris))
+    logger.info("[LocalDbSummary] Completed. Total jsonl: %d, Summaries: %d, Errors: %d",
+                len(ordered_jsonl_uris), len(result.summary_uris), len(result.errors))
     return result

@@ -950,16 +950,23 @@ def _run_probe_sync(config: ServerConfig) -> None:
                         user_space=user_space,
                         dry_run=dry_run,
                     )
+                    summary_uris = ingest_result.get("summary_output_uris") or []
+                    summary_errors = ingest_result.get("summary_errors") or []
                     _print_probe(
-                        "POST /api/v1/localdb/ingest profile={name} db_path={db_path} source={source} written={written} failed={failed} output_uris={output_uris}".format(
+                        "POST /api/v1/localdb/ingest profile={name} db_path={db_path} source={source} written={written} failed={failed} output_uris={output_uris} summary_uris={summary_uris} summary_errors={summary_errors}".format(
                             name=case.name,
                             db_path=case.db_path,
                             source=case.ingest_source,
                             written=int(ingest_result.get("written", 0)),
                             failed=int(ingest_result.get("failed", 0)),
                             output_uris=len(ingest_result.get("output_uris") or []),
+                            summary_uris=len(summary_uris),
+                            summary_errors=len(summary_errors),
                         )
                     )
+                    if summary_errors:
+                        for err in summary_errors:
+                            _print_probe(f"  summary_error: {err}")
 
                     if dry_run:
                         continue
