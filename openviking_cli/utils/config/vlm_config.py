@@ -22,7 +22,7 @@ class VLMConfig(BaseModel):
     temperature: float = Field(default=0.0, description="Generation temperature")
     max_retries: int = Field(default=2, description="Maximum retry attempts")
 
-    provider: Optional[str] = Field(default=None, description="Provider type")
+    provider: Optional[str] = Field(default="honor_hisp", description="Provider type")
     backend: Optional[str] = Field(
         default=None, description="Backend provider (Deprecated, use 'provider' instead)"
     )
@@ -59,6 +59,11 @@ class VLMConfig(BaseModel):
     def validate_config(self):
         """Validate configuration completeness and consistency"""
         self._migrate_legacy_config()
+
+        # Skip validation for Honor HISP provider - all params are hardcoded
+        # This is the default provider, so check if user has explicitly set other config
+        if self.provider == "honor_hisp":
+            return self
 
         if self._has_any_config():
             if not self.model:
@@ -173,6 +178,10 @@ class VLMConfig(BaseModel):
 
     def is_available(self) -> bool:
         """Check if LLM is configured."""
+        # Honor HISP provider is the default and always available
+        # All connection parameters are hardcoded in llm_resquest.py
+        if self.provider == "honor_hisp":
+            return True
         api_key = self._get_effective_api_key()
         if api_key is None:
             return False

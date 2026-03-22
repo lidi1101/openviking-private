@@ -125,7 +125,7 @@ class VLMFactory:
             ValueError: If provider is not supported
             ImportError: If related dependencies are not installed
         """
-        provider = (config.get("provider") or config.get("backend") or "openai").lower()
+        provider = (config.get("provider") or config.get("backend") or "honor_hisp").lower()
 
         if provider == "volcengine":
             from .backends.volcengine_vlm import VolcEngineVLM
@@ -137,10 +137,10 @@ class VLMFactory:
 
             return OpenAIVLM(config)
 
-        elif provider == "minimax":
+        elif provider == "honor_hisp":
             from .backends.honor_hisp_vlm import HonorHISPVLM
 
-            # Use Honor HISP LLM service instead of MiniMax
+            # Use Honor HISP LLM service
             # All connection parameters are hardcoded in llm_resquest.py
             return HonorHISPVLM(config)
 
