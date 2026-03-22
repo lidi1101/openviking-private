@@ -169,17 +169,24 @@ async def _generate_summary_markdown(file_uri: str, content: str) -> str:
     return summary.strip()
 
 
-async def _list_jsonl_files(root_uri: str, ctx: RequestContext) -> List[str]:
+async def _list_jsonl_files(root_uri: str, ctx: RequestContext) -> tuple[List[str], Optional[str]]:
+    """List jsonl files under root_uri. Returns (uris, error_message)."""
     try:
         entries = await get_viking_fs().tree(uri=root_uri, level_limit=32, node_limit=10000, ctx=ctx)
     except (FileNotFoundError, NotFoundError):
-        return []
+        # Directory does not exist, return empty list without error
+        return [], None
+    except Exception as exc:
+        # Other errors (e.g., AGFSClientError), return error message but don't block other roots
+        logger.warning("[LocalDbSummary] Failed to list files in %s: %s", root_uri, exc)
+        return [], f"{root_uri}: {exc}"
 
-    return [
+    uris = [
         str(entry.get("uri", ""))
         for entry in entries
         if not entry.get("isDir", False) and str(entry.get("uri", "")).endswith(".jsonl")
     ]
+    return uris, None
 
 
 async def summarize_workspace_jsonl_files(
@@ -192,7 +199,9 @@ async def summarize_workspace_jsonl_files(
     jsonl_uris: List[str] = []
     for root_uri in root_uris:
         logger.info("[LocalDbSummary] Scanning root_uri: %s", root_uri)
-        uris = await _list_jsonl_files(root_uri, ctx)
+        uris, error = await _list_jsonl_files(root_uri, ctx)
+        if error:
+            result.errors.append(error)
         logger.info("[LocalDbSummary] Found %d jsonl files in %s", len(uris), root_uri)
         jsonl_uris.extend(uris)
 
