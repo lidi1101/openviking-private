@@ -55,7 +55,7 @@ PROFILE_CASES = {
         config_path=USER_PREFERENCE_MAPPING_PATH,
         ingest_source="user_preference",
         query_profile="user_preference",
-        query_source="user_preference",
+        query_source="userpreference",
     ),
 }
 
