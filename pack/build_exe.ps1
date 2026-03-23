@@ -37,6 +37,7 @@ $bundledMingwArchives = @(
     (Join-Path $projectRoot "third_party\mingw64.7z"),
     (Join-Path $projectRoot "third_party\mingw64.zip")
 )
+$pythonPackagesDir = Join-Path $packRoot "python_packages"
 $stepResults = New-Object System.Collections.Generic.List[object]
 $currentStep = $null
 
@@ -310,6 +311,86 @@ function Get-ResolvedCommandSource {
 
     return $command.Source
 }
+
+function Get-LocalWheelPath {
+    param(
+        [string]$PackageName
+    )
+
+    if (-not (Test-Path $pythonPackagesDir)) {
+        return $null
+    }
+
+    $wheel = Get-ChildItem -Path $pythonPackagesDir -File -Filter "$PackageName-*.whl" |
+        Sort-Object Name -Descending |
+        Select-Object -First 1
+    if (-not $wheel) {
+        return $null
+    }
+
+    return $wheel.FullName
+}
+
+function Install-LocalPythonPackages {
+    param(
+        [string[]]$PackageNames
+    )
+
+    if (-not $PackageNames -or $PackageNames.Count -eq 0) {
+        return
+    }
+
+    if (-not (Test-Path $pythonPackagesDir)) {
+        throw "Local Python package directory not found: $pythonPackagesDir"
+    }
+
+    $packages = $PackageNames | Select-Object -Unique
+    $missingWheels = @()
+    foreach ($packageName in $packages) {
+        if (-not (Get-LocalWheelPath -PackageName $packageName)) {
+            $missingWheels += $packageName
+        }
+    }
+
+    if ($missingWheels.Count -gt 0) {
+        throw "Missing offline wheels under $pythonPackagesDir for: $($missingWheels -join ', ')"
+    }
+
+    Write-Host "Installing offline Python packages from ${pythonPackagesDir}: $($packages -join ', ')"
+    Invoke-Python -PythonCmd $pythonCmd -Arguments (@('-m', 'pip', 'install', '--no-index', '--find-links', $pythonPackagesDir) + $packages) | Out-Host
+}
+
+function Ensure-PythonModulesAvailable {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object[]]$Modules
+    )
+
+    $packagesToInstall = @()
+    foreach ($pythonModule in $Modules) {
+        try {
+            Invoke-Python -PythonCmd $pythonCmd -Arguments @('-c', "import $($pythonModule.Name)")
+        } catch {
+            $packagesToInstall += $pythonModule.Package
+        }
+    }
+
+    if ($packagesToInstall.Count -gt 0) {
+        Install-LocalPythonPackages -PackageNames $packagesToInstall
+    }
+
+    $missingHints = @()
+    foreach ($pythonModule in $Modules) {
+        try {
+            Invoke-Python -PythonCmd $pythonCmd -Arguments @('-c', "import $($pythonModule.Name)")
+        } catch {
+            $missingHints += $pythonModule.Hint
+        }
+    }
+
+    return $missingHints
+}
+
 
 function Initialize-BundledToolchain {
     if (-not (Test-Path $bundledMingwBin)) {
@@ -587,12 +668,10 @@ function Assert-PackagingPrerequisites {
 
     if (-not (Test-CommandAvailable "pip")) {
         $missing += "pip"
-    }
-
-    try {
-        Invoke-Python -PythonCmd $pythonCmd -Arguments @("-c", "import PyInstaller")
-    } catch {
-        $missing += "PyInstaller (install with: pip install -U pyinstaller)"
+    } else {
+        $missing += Ensure-PythonModulesAvailable -Modules @(
+            @{ Name = "PyInstaller"; Package = "pyinstaller"; Hint = "PyInstaller (install with: pip install -U pyinstaller)" }
+        )
     }
 
     if ($NeedsArtifactBuild) {
@@ -600,16 +679,12 @@ function Assert-PackagingPrerequisites {
         Initialize-BundledToolchain
         Show-ResolvedToolchain
 
-        foreach ($pythonModule in @(
-            @{ Name = "pybind11"; Hint = "pybind11 (install with: pip install pybind11)" },
-            @{ Name = "setuptools"; Hint = "setuptools (install with: pip install -U setuptools)" },
-            @{ Name = "wheel"; Hint = "wheel (install with: pip install wheel)" }
-        )) {
-            try {
-                Invoke-Python -PythonCmd $pythonCmd -Arguments @("-c", "import $($pythonModule.Name)")
-            } catch {
-                $missing += $pythonModule.Hint
-            }
+        if (Test-CommandAvailable "pip") {
+            $missing += Ensure-PythonModulesAvailable -Modules @(
+                @{ Name = "pybind11"; Package = "pybind11"; Hint = "pybind11 (install with: pip install pybind11)" },
+                @{ Name = "setuptools"; Package = "setuptools"; Hint = "setuptools (install with: pip install -U setuptools)" },
+                @{ Name = "wheel"; Package = "wheel"; Hint = "wheel (install with: pip install wheel)" }
+            )
         }
 
         foreach ($tool in @("go", "cmake", "gcc", "g++")) {
@@ -846,4 +921,6 @@ $nextStep
 } finally {
     Write-PackagingSummary -Succeeded $buildSucceeded
 }
+
+
 

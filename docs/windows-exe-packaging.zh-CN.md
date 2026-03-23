@@ -10,7 +10,7 @@
 - `pack\build_exe.ps1`
 - `pack\package_release.ps1`
 - `pack\packaging_config.ps1`
-- `pack\ClawMemoryPack.spec`
+- `pack\Pack.spec`
 - `pack\ov-binding-client.example.conf`
 
 浠撳簱鏍圭洰褰曞彧淇濈暀鍙戝竷鍏ュ彛锛?
@@ -278,6 +278,7 @@ Resolved toolchain:
 - `pack\build_exe.ps1`
 - `pack\package_release.ps1`
 - `pack\packaging_config.ps1`
-- `pack\ClawMemoryPack.spec`
+- `pack\Pack.spec`
 - `pack\ov-binding-client.example.conf`
+
 

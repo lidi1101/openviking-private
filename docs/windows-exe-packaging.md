@@ -11,7 +11,7 @@ The packaging files are now centralized under:
 - `pack\build_exe.ps1`
 - `pack\package_release.ps1`
 - `pack\packaging_config.ps1`
-- `pack\ClawMemoryPack.spec`
+- `pack\Pack.spec`
 - `pack\ov-binding-client.example.conf`
 
 The root directory only keeps the release entrypoints:
@@ -334,6 +334,7 @@ are supported. The `.001` file is treated as the archive entry file.
 - `pack\build_exe.ps1`
 - `pack\package_release.ps1`
 - `pack\packaging_config.ps1`
-- `pack\ClawMemoryPack.spec`
+- `pack\Pack.spec`
 - `pack\ov-binding-client.example.conf`
+
 

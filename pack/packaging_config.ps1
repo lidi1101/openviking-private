@@ -1,2 +1,3 @@
-$PackageName = "ClawMemory"
-$SpecFileName = "ClawMemoryPack.spec"
+﻿$PackageName = "BrainMemory"
+$SpecFileName = "Pack.spec"
+
